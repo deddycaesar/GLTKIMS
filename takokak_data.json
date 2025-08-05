@@ -1,0 +1,34 @@
+{
+    "users": {
+        "admin": {
+            "password": "admin123",
+            "role": "admin"
+        },
+        "user": {
+            "password": "user123",
+            "role": "user"
+        }
+    },
+    "inventory": {
+        "ITM-0001": {
+            "name": "Baju",
+            "qty": 100,
+            "unit": "PCS",
+            "category": "Merchandise"
+        }
+    },
+    "item_counter": 1,
+    "pending_requests": [],
+    "history": [
+        {
+            "action": "ADD_ITEM",
+            "item": "Baju",
+            "qty": 100,
+            "stock": 100,
+            "unit": "PCS",
+            "user": "admin",
+            "event": "-",
+            "timestamp": "2025-08-05 10:25:53"
+        }
+    ]
+}
