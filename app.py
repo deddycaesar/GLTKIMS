@@ -12,7 +12,7 @@ DATA_FILES = {
 }
 UPLOADS_DIR = "uploads"
 # Perubahan: Ganti URL banner dengan yang dapat diakses secara permanen
-BANNER_URL = "https://i.ibb.co/68qGg44/gulavit-banner-login.png" # Contoh URL publik
+BANNER_URL = "https://media.licdn.com/dms/image/v2/D563DAQFDri8xlKNIvg/image-scale_191_1128/image-scale_191_1128/0/1678337293506/pesona_inti_rasa_cover?e=2147483647&v=beta&t=vHi0xtyAZsT9clHb0yBYPE8M9IaO2dNY6Cb_Vs3Ddlo" # Contoh URL publik
 ICON_URL = "https://i.ibb.co/7C96T9y/favicon.png"
 
 # Pastikan folder uploads ada
@@ -830,3 +830,4 @@ else:
 
 # ====== Footer ======
 st.markdown("<hr><center>© 2025 GULAVIT-TAKOKAK IMS | PT Pesona Inti Rasa</center>", unsafe_allow_html=True)
+
