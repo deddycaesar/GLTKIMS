@@ -12,7 +12,7 @@ DATA_FILES = {
 }
 UPLOADS_DIR = "uploads"
 # Perubahan: Ganti URL banner dengan yang dapat diakses secara permanen
-BANNER_URL = "https://media.licdn.com/dms/image/v2/D563DAQFDri8xlKNIvg/image-scale_191_1128/image-scale_191_1128/0/1678337293506/pesona_inti_rasa_cover?e=2147483647&v=beta&t=vHi0xtyAZsT9clHb0yBYPE8M9IaO2dNY6Cb_Vs3Ddlo" # Contoh URL publik
+BANNER_URL = "https://i.ibb.co/68qGg44/gulavit-banner-login.png" # Contoh URL publik
 ICON_URL = "https://i.ibb.co/7C96T9y/favicon.png"
 
 # Pastikan folder uploads ada
@@ -94,8 +94,6 @@ def load_data(brand_key):
             st.error(f"Error reading data file: {e}. Starting with empty data.")
     
     # Mengambil kredensial dari secrets
-    # Perhatikan: jika Anda menjalankan ini di lokal, Anda perlu membuat file .streamlit/secrets.toml
-    # Jika tidak, ini akan gagal.
     return {
         "users": {
             "admin": {"password": st.secrets.get("passwords", {}).get("admin"), "role": "admin"},
@@ -324,7 +322,8 @@ else:
                 st.info("Format Excel: **Nama Barang | Qty | Satuan | Kategori**")
                 file_upload = st.file_uploader("Upload File Excel", type=["xlsx"])
                 if file_upload:
-                    df_new = pd.read_excel(file_upload)
+                    # Perbaikan: Tambahkan engine='openpyxl'
+                    df_new = pd.read_excel(file_upload, engine='openpyxl')
                     required_cols = ["Nama Barang", "Qty", "Satuan", "Kategori"]
 
                     if all(col in df_new.columns for col in required_cols):
@@ -602,7 +601,8 @@ else:
                     st.info("Format Excel: **Nama Barang | Qty | Satuan**")
                     file_upload = st.file_uploader("Upload File Excel", type=["xlsx"], key="in_excel_uploader")
                     if file_upload:
-                        df_new = pd.read_excel(file_upload)
+                        # Perbaikan: Tambahkan engine='openpyxl'
+                        df_new = pd.read_excel(file_upload, engine='openpyxl')
                         required_cols = ["Nama Barang", "Qty", "Satuan"]
                         
                         if all(col in df_new.columns for col in required_cols):
