@@ -1,6 +1,6 @@
 {
     "users": {
-        "admin": {
+        "approver": {
             "password": "approver123",
             "role": "admin"
         },
@@ -33,4 +33,5 @@
     ]
 
 }
+
 
