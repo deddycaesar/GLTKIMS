@@ -1,8 +1,8 @@
 {
     "users": {
         "admin": {
-            "password": "admin1234",
-            "role": "admin"
+            "password": "approver123",
+            "role": "approver123"
         },
         "user": {
             "password": "user123",
@@ -31,4 +31,5 @@
             "timestamp": "2025-08-05 11:02:02"
         }
     ]
+
 }
