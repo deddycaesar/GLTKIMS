@@ -358,10 +358,21 @@ else:
             st.markdown(f"## Approve / Reject Request Barang - Brand {st.session_state.current_brand.capitalize()}")
             st.divider()
             if data["pending_requests"]:
-                df_pending = pd.DataFrame(data["pending_requests"])
+                # --- PERBAIKAN SCRIPT INI ---
+                # Memproses data pending_requests untuk memastikan setiap item memiliki kunci 'attachment'
+                processed_requests = []
+                for req in data["pending_requests"]:
+                    temp_req = req.copy()
+                    if 'attachment' not in temp_req:
+                        temp_req['attachment'] = None
+                    processed_requests.append(temp_req)
+
+                df_pending = pd.DataFrame(processed_requests)
                 df_pending["Lampiran"] = df_pending["attachment"].apply(
                     lambda x: "Ada" if x else "Tidak Ada"
                 )
+                # --- AKHIR PERBAIKAN SCRIPT ---
+                
                 df_pending["Pilih"] = False
                 edited_df = st.data_editor(df_pending, use_container_width=True, hide_index=True)
                 
@@ -588,7 +599,7 @@ else:
                         format_func=lambda x: f"{items[x]['name']} ({items[x]['qty']} {items[x].get('unit', '-')})"
                     )
                     qty = col2.number_input("Jumlah", min_value=1, step=1)
-    
+            
                     if st.button("Tambah Item IN"):
                         st.session_state.req_in_items.append({
                             "item": items[idx]["name"],
@@ -649,68 +660,59 @@ else:
                             attachment_path = None
                             if uploaded_file:
                                 timestamp_str = datetime.now().strftime("%Y%m%d%H%M%S")
-                                attachment_filename = f"IN_{timestamp_str}_{uploaded_file.name}"
-                                attachment_path = os.path.join(UPLOADS_DIR, attachment_filename)
+                                file_ext = uploaded_file.name.split(".")[-1]
+                                attachment_path = os.path.join(UPLOADS_DIR, f"{st.session_state.username}_{timestamp_str}.{file_ext}")
                                 with open(attachment_path, "wb") as f:
                                     f.write(uploaded_file.getbuffer())
 
-                            for index, req in selected_in.iterrows():
-                                data["pending_requests"].append({
-                                    "user": st.session_state.username,
+                            for _, req in selected_in.iterrows():
+                                request_data = {
+                                    "type": "IN",
                                     "item": req["item"],
                                     "qty": int(req["qty"]),
-                                    "unit": req["unit"],
-                                    "type": "IN",
-                                    "timestamp": timestamp(),
+                                    "unit": req.get("unit", "-"),
+                                    "user": st.session_state.username,
                                     "event": "-",
                                     "do_number": do_number,
-                                    "attachment": attachment_path
-                                })
-
-                            st.session_state.req_in_items = [
-                                req for i, req in enumerate(st.session_state.req_in_items) if not edited_df_in.loc[i, "Pilih"]
-                            ]
-
+                                    "attachment": attachment_path,
+                                    "timestamp": timestamp()
+                                }
+                                data["pending_requests"].append(request_data)
+                                
                             save_data(data, st.session_state.current_brand)
-                            st.session_state.notification = {"type": "success", "message": "Request IN berhasil diajukan."}
+                            st.session_state.req_in_items = [
+                                req for i, req in enumerate(st.session_state.req_in_items)
+                                if not edited_df_in.loc[i, "Pilih"]
+                            ]
+                            st.session_state.notification = {"type": "success", "message": f"{len(selected_in)} request IN berhasil diajukan dan menunggu approval."}
                             st.rerun()
                         else:
                             st.session_state.notification = {"type": "warning", "message": "Pilih setidaknya satu item untuk diajukan."}
                             st.rerun()
             else:
-                st.info("Belum ada barang di inventory.")
+                st.info("Belum ada master barang. Silakan hubungi admin.")
 
         elif menu == "Request Barang OUT":
             st.markdown(f"## Request Barang Keluar (Multi Item) - Brand {st.session_state.current_brand.capitalize()}")
             st.divider()
+            
             if items:
-                existing_events = list({
-                    h.get("event") for h in data["history"] + data["pending_requests"]
-                    if h.get("event") and h.get("event") != "-"
-                })
-                existing_events.sort()
+                col1, col2 = st.columns(2)
+                idx = col1.selectbox(
+                    "Pilih Barang", range(len(items)),
+                    format_func=lambda x: f"{items[x]['name']} (Stok: {items[x]['qty']} {items[x].get('unit', '-')})"
+                )
+                
+                max_qty = items[idx]["qty"]
+                qty = col2.number_input("Jumlah", min_value=1, max_value=max_qty, step=1)
 
-                event_choice = st.selectbox("Pilih Event", ["➕ Tambah Event Baru..."] + existing_events)
-                if event_choice == "➕ Tambah Event Baru...":
-                    event = st.text_input("Nama Event Baru")
-                else:
-                    event = event_choice
-
-                if event:
-                    col1, col2 = st.columns(2)
-                    idx = col1.selectbox(
-                        "Pilih Barang", range(len(items)),
-                        format_func=lambda x: f"{items[x]['name']} ({items[x]['qty']} {items[x].get('unit', '-')})"
-                    )
-                    qty = col2.number_input("Jumlah", min_value=1, step=1)
-
-                    if st.button("Tambah Item OUT"):
-                        st.session_state.req_out_items.append({
-                            "item": items[idx]["name"],
-                            "qty": qty,
-                            "unit": items[idx].get("unit", "-"),
-                            "event": event
-                        })
+                if st.button("Tambah Item OUT"):
+                    st.session_state.req_out_items.append({
+                        "item": items[idx]["name"],
+                        "qty": qty,
+                        "unit": items[idx].get("unit", "-"),
+                        "event": "-"
+                    })
 
                 if st.session_state.req_out_items:
                     st.subheader("Daftar Item Request OUT")
@@ -718,116 +720,56 @@ else:
                     df_out["Pilih"] = False
                     edited_df_out = st.data_editor(df_out, use_container_width=True, hide_index=True)
 
-                    selected_to_delete_out = edited_df_out.loc[(edited_df_out['Pilih']), :]
-                    if st.button("Hapus Item OUT Terpilih") and not selected_to_delete_out.empty:
+                    selected_to_delete = edited_df_out.loc[(edited_df_out['Pilih']), :]
+                    if st.button("Hapus Item Terpilih", key="delete_out") and not selected_to_delete.empty:
                         st.session_state.req_out_items = [
                             req for i, req in enumerate(st.session_state.req_out_items)
                             if not edited_df_out.loc[i, "Pilih"]
                         ]
                         st.rerun()
 
+                    st.divider()
+                    event_name = st.text_input("Nama Event", placeholder="Misal: Pameran, Acara Kantor")
                     if st.button("Ajukan Request OUT Terpilih"):
                         selected_out = edited_df_out.loc[(edited_df_out['Pilih']), :]
                         if not selected_out.empty:
-                            for index, req in selected_out.iterrows():
-                                data["pending_requests"].append({
-                                    "user": st.session_state.username,
+                            for _, req in selected_out.iterrows():
+                                request_data = {
+                                    "type": "OUT",
                                     "item": req["item"],
                                     "qty": int(req["qty"]),
-                                    "unit": req["unit"],
-                                    "type": "OUT",
-                                    "timestamp": timestamp(),
-                                    "event": req["event"]
-                                })
-
-                            st.session_state.req_out_items = [
-                                req for i, req in enumerate(st.session_state.req_out_items) if not edited_df_out.loc[i, "Pilih"]
-                            ]
+                                    "unit": req.get("unit", "-"),
+                                    "user": st.session_state.username,
+                                    "event": event_name,
+                                    "do_number": "-",
+                                    "attachment": None,
+                                    "timestamp": timestamp()
+                                }
+                                data["pending_requests"].append(request_data)
 
                             save_data(data, st.session_state.current_brand)
-                            st.session_state.notification = {"type": "success", "message": "Request OUT berhasil diajukan."}
+                            st.session_state.req_out_items = [
+                                req for i, req in enumerate(st.session_state.req_out_items)
+                                if not edited_df_out.loc[i, "Pilih"]
+                            ]
+                            st.session_state.notification = {"type": "success", "message": f"{len(selected_out)} request OUT berhasil diajukan dan menunggu approval."}
                             st.rerun()
                         else:
                             st.session_state.notification = {"type": "warning", "message": "Pilih setidaknya satu item untuk diajukan."}
                             st.rerun()
             else:
-                st.info("Belum ada barang di inventory.")
+                st.info("Belum ada master barang. Silakan hubungi admin.")
 
         elif menu == "Lihat Riwayat":
-            st.markdown(f"## Riwayat Request Saya - Brand {st.session_state.current_brand.capitalize()}")
+            st.markdown(f"## Riwayat Saya - Brand {st.session_state.current_brand.capitalize()}")
             st.divider()
-            
-            history_user_approved = [h for h in data["history"] if h.get("user") == st.session_state.username and h.get("action", "").startswith("APPROVE")]
-            history_user_pending = [p for p in data["pending_requests"] if p.get("user") == st.session_state.username]
-            history_user_rejected = [h for h in data["history"] if h.get("user") == st.session_state.username and h.get("action", "").startswith("REJECT")]
 
-            for item in history_user_approved:
-                item["status"] = "Approved"
-                item["type"] = item.get("action", "").split("_")[1] if "_" in item.get("action", "") else item.get("action")
-            for item in history_user_pending:
-                item["status"] = "Pending"
-            for item in history_user_rejected:
-                item["status"] = "Rejected"
-                item["type"] = item.get("action", "").split("_")[1] if "_" in item.get("action", "") else item.get("action")
-
-            all_user_requests = history_user_approved + history_user_pending + history_user_rejected
-            
-            if all_user_requests:
-                all_keys = ["action", "item", "qty", "stock", "unit", "user", "event", "do_number", "attachment", "timestamp", "status", "type"]
-                processed_requests = []
-                for entry in all_user_requests:
-                    new_entry = {key: entry.get(key, None) for key in all_keys}
-                    if new_entry.get("do_number") is None: new_entry["do_number"] = "-"
-                    if new_entry.get("event") is None: new_entry["event"] = "-"
-                    if new_entry.get("unit") is None: new_entry["unit"] = "-"
-                    processed_requests.append(new_entry)
-
-                df_requests_full = pd.DataFrame(processed_requests)
-                df_requests_full['date'] = pd.to_datetime(df_requests_full['timestamp']).dt.date
-                
-                def get_download_link(path):
-                    if path and os.path.exists(path):
-                        with open(path, "rb") as f:
-                            bytes_data = f.read()
-                        b64 = base64.b64encode(bytes_data).decode()
-                        return f'<a href="data:application/pdf;base64,{b64}" download="{os.path.basename(path)}">Unduh</a>'
-                    return 'Tidak Ada'
-                
-                df_requests_full['Lampiran'] = df_requests_full['attachment'].apply(get_download_link)
-
-                col1, col2 = st.columns(2)
-                start_date = col1.date_input("Tanggal Mulai", value=df_requests_full['date'].min())
-                end_date = col2.date_input("Tanggal Akhir", value=df_requests_full['date'].max())
-                
-                col3, col4 = st.columns(2)
-                unique_types = ["Semua Tipe"] + sorted(df_requests_full["type"].unique())
-                selected_type = col3.selectbox("Filter Tipe Aksi", unique_types)
-                
-                unique_events = ["Semua Event"] + sorted(df_requests_full.get('event', pd.Series([])).unique())
-                selected_event = col4.selectbox("Filter Event", unique_events)
-                
-                search_item = st.text_input("Cari Nama Barang")
-
-                df_filtered = df_requests_full.copy()
-                
-                df_filtered = df_filtered[(df_filtered['date'] >= start_date) & (df_filtered['date'] <= end_date)]
-
-                if selected_type != "Semua Tipe":
-                    df_filtered = df_filtered[df_filtered["type"] == selected_type]
-                
-                if selected_event != "Semua Event":
-                    df_filtered = df_filtered[df_filtered["event"] == selected_event]
-
-                if search_item:
-                    df_filtered = df_filtered[df_filtered["item"].str.contains(search_item, case=False)]
-                
-                st.markdown(
-                    df_filtered[["timestamp", "item", "type", "qty", "unit", "event", "do_number", "status", "Lampiran"]].to_html(escape=False),
-                    unsafe_allow_html=True
-                )
+            if data["history"]:
+                my_history = [h for h in data["history"] if h["user"] == st.session_state.username]
+                if my_history:
+                    df_my_history = pd.DataFrame(my_history)
+                    st.dataframe(df_my_history, use_container_width=True, hide_index=True)
+                else:
+                    st.info("Anda belum memiliki riwayat transaksi.")
             else:
-                st.info("Belum ada riwayat request.")
-
-# ====== Footer ======
-st.markdown("<hr><center>© 2025 GULAVIT-TAKOKAK IMS | PT Pesona Inti Rasa</center>", unsafe_allow_html=True)
-
+                st.info("Tidak ada riwayat transaksi.")
