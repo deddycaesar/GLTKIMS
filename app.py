@@ -198,6 +198,112 @@ else:
         ]
         menu = st.sidebar.radio("📌 Menu Admin", admin_options)
 
+            if menu == "Dashboard":
+        st.markdown(f"## Dashboard - Brand {st.session_state.current_brand.capitalize()}")
+        st.divider()
+
+        # --- Siapkan Data Dasar ---
+        # Inventory sekarang
+        inv_records = [
+            {"Kode": code, "Nama Barang": item.get("name", "-"), "Current Stock": int(item.get("qty", 0))}
+            for code, item in data.get("inventory", {}).items()
+        ]
+        df_inv = pd.DataFrame(inv_records) if inv_records else pd.DataFrame(columns=["Kode","Nama Barang","Current Stock"])
+
+        # History (untuk agregasi 3 bulan terakhir)
+        hist = data.get("history", [])
+        df_hist = pd.DataFrame(hist) if hist else pd.DataFrame(columns=["action","item","qty","timestamp"])
+
+        if df_hist.empty and df_inv.empty:
+            st.info("Belum ada data untuk ditampilkan di Dashboard.")
+        else:
+            # Pastikan kolom qty numerik dan timestamp datetime
+            if not df_hist.empty:
+                df_hist["qty"] = pd.to_numeric(df_hist.get("qty", 0), errors="coerce").fillna(0).astype(int)
+                df_hist["timestamp"] = pd.to_datetime(df_hist.get("timestamp", pd.NaT), errors="coerce")
+
+                # Ambil 3 bulan terakhir
+                three_months_ago = pd.Timestamp.now() - pd.DateOffset(months=3)
+                df_last3 = df_hist[df_hist["timestamp"] >= three_months_ago].copy()
+
+                # Normalisasi kolom action ke upper untuk robust match
+                df_last3["ACTION_UP"] = df_last3["action"].astype(str).str.upper()
+
+                # Tandai jenis transaksi
+                df_last3["IN_QTY"] = df_last3.apply(
+                    lambda r: r["qty"] if "APPROVE_IN" in r["ACTION_UP"] else 0, axis=1
+                )
+                df_last3["OUT_QTY"] = df_last3.apply(
+                    lambda r: r["qty"] if "APPROVE_OUT" in r["ACTION_UP"] else 0, axis=1
+                )
+                # Catat retur jika di history ada pola 'RETURN' (misal APPROVE_RETURN / RETURN_IN / RETURN_OUT)
+                df_last3["RETUR_QTY"] = df_last3.apply(
+                    lambda r: r["qty"] if "RETURN" in r["ACTION_UP"] else 0, axis=1
+                )
+
+                # Agregasi per item
+                agg_3bulan = (
+                    df_last3.groupby("item", dropna=False)[["IN_QTY","OUT_QTY","RETUR_QTY"]]
+                    .sum()
+                    .reset_index()
+                    .rename(columns={
+                        "item": "Nama Barang",
+                        "IN_QTY": "IN (3 bln)",
+                        "OUT_QTY": "OUT (3 bln)",
+                        "RETUR_QTY": "RETUR (3 bln)"
+                    })
+                )
+            else:
+                agg_3bulan = pd.DataFrame(columns=["Nama Barang","IN (3 bln)","OUT (3 bln)","RETUR (3 bln)"])
+
+            # Gabungkan dengan current stock
+            if not df_inv.empty:
+                df_dash = pd.merge(
+                    agg_3bulan,
+                    df_inv[["Nama Barang","Current Stock"]],
+                    on="Nama Barang",
+                    how="outer"
+                ).fillna(0)
+                # Rapikan tipe data
+                for c in ["IN (3 bln)","OUT (3 bln)","RETUR (3 bln)","Current Stock"]:
+                    if c in df_dash.columns:
+                        df_dash[c] = pd.to_numeric(df_dash[c], errors="coerce").fillna(0).astype(int)
+            else:
+                # Jika inventory kosong tapi ada agregasi history
+                df_dash = agg_3bulan.copy()
+                df_dash["Current Stock"] = 0
+
+            # ====== TAMPILAN RINGKAS ======
+            colA, colB, colC, colD = st.columns(4)
+            total_in = int(df_dash["IN (3 bln)"].sum()) if "IN (3 bln)" in df_dash else 0
+            total_out = int(df_dash["OUT (3 bln)"].sum()) if "OUT (3 bln)" in df_dash else 0
+            total_retur = int(df_dash["RETUR (3 bln)"].sum()) if "RETUR (3 bln)" in df_dash else 0
+            total_item = int(df_inv.shape[0]) if not df_inv.empty else 0
+
+            colA.metric("Total IN (3 bln)", f"{total_in}")
+            colB.metric("Total OUT (3 bln)", f"{total_out}")
+            colC.metric("Total Retur (3 bln)", f"{total_retur}")
+            colD.metric("Jumlah Item Aktif", f"{total_item}")
+
+            st.markdown("### Rekap Per Barang (3 Bulan Terakhir + Current Stock)")
+            if df_dash.empty:
+                st.info("Belum ada transaksi 3 bulan terakhir.")
+            else:
+                # Urutkan agar mudah dibaca (stok terbesar dulu)
+                order_cols = ["Nama Barang","IN (3 bln)","OUT (3 bln)","RETUR (3 bln)","Current Stock"]
+                existing_cols = [c for c in order_cols if c in df_dash.columns]
+                st.dataframe(df_dash[existing_cols].sort_values("Current Stock", ascending=False),
+                             use_container_width=True, hide_index=True)
+
+            st.divider()
+            st.markdown("### Top 5 Item dengan Current Stock Terbesar")
+            if df_inv.empty:
+                st.info("Inventory kosong.")
+            else:
+                df_top5 = df_inv.sort_values("Current Stock", ascending=False).head(5).reset_index(drop=True)
+                st.dataframe(df_top5, use_container_width=True, hide_index=True)
+
+
         if menu == "Lihat Stok Barang":
             st.markdown(f"## Stok Barang - Brand {st.session_state.current_brand.capitalize()}")
             st.divider()
@@ -773,3 +879,4 @@ else:
                     st.info("Anda belum memiliki riwayat transaksi.")
             else:
                 st.info("Tidak ada riwayat transaksi.")
+
