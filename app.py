@@ -6,6 +6,13 @@ import pandas as pd
 import base64
 from io import BytesIO
 
+# Optional untuk grafik yang lebih menarik
+try:
+    import altair as alt
+    _ALT_OK = True
+except Exception:
+    _ALT_OK = False
+
 # ====== Konfigurasi Multi-Brand ======
 DATA_FILES = {
     "gulavit": "gulavit_data.json",
@@ -208,6 +215,61 @@ def make_master_template_bytes() -> bytes:
     output.seek(0)
     return output.read()
 
+def dashboard_charts(df_dash: pd.DataFrame, month_labels: list, df_inv: pd.DataFrame):
+    """Tampilkan grafik-grafik dashboard (total IN/OUT/Retur per bulan + Top 5 current stock)."""
+    # Total per bulan
+    totals = []
+    for lbl in month_labels:
+        totals.append({
+            "Bulan": lbl,
+            "IN":  int(df_dash.get(f"{lbl} IN", pd.Series()).sum()) if f"{lbl} IN" in df_dash.columns else 0,
+            "OUT": int(df_dash.get(f"{lbl} OUT", pd.Series()).sum()) if f"{lbl} OUT" in df_dash.columns else 0,
+            "Retur": int(df_dash.get(f"{lbl} Retur", pd.Series()).sum()) if f"{lbl} Retur" in df_dash.columns else 0,
+        })
+    df_tot = pd.DataFrame(totals)
+    c1, c2 = st.columns(2)
+
+    with c1:
+        st.subheader("Total IN/OUT/Retur (3 Bulan)")
+        if _ALT_OK and not df_tot.empty:
+            df_long = df_tot.melt("Bulan", var_name="Tipe", value_name="Jumlah")
+            chart = (
+                alt.Chart(df_long)
+                .mark_bar()
+                .encode(
+                    x=alt.X("Bulan:N", title="Bulan"),
+                    y=alt.Y("Jumlah:Q", title="Jumlah"),
+                    color=alt.Color("Tipe:N"),
+                    xOffset="Tipe:N",
+                    tooltip=["Bulan","Tipe","Jumlah"]
+                )
+                .properties(height=300)
+            )
+            st.altair_chart(chart, use_container_width=True)
+        else:
+            st.bar_chart(df_tot.set_index("Bulan"))
+
+    with c2:
+        st.subheader("Top 5 Current Stock")
+        if df_inv.empty:
+            st.info("Inventory kosong.")
+        else:
+            df_top5 = df_inv.sort_values("Current Stock", ascending=False).head(5).copy()
+            if _ALT_OK:
+                chart2 = (
+                    alt.Chart(df_top5)
+                    .mark_bar()
+                    .encode(
+                        y=alt.Y("Nama Barang:N", sort="-x", title="Item"),
+                        x=alt.X("Current Stock:Q", title="Qty"),
+                        tooltip=["Nama Barang","Current Stock"]
+                    )
+                    .properties(height=300)
+                )
+                st.altair_chart(chart2, use_container_width=True)
+            else:
+                st.bar_chart(df_top5.set_index("Nama Barang")["Current Stock"])
+
 # ====== Session State ======
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
@@ -299,7 +361,7 @@ else:
         # ===== Dashboard (Admin) =====
         if menu == "Dashboard":
             st.markdown(f"## Dashboard - Brand {st.session_state.current_brand.capitalize()}")
-            st.caption("Tiap bulan menampilkan total **IN / OUT / Retur** yang sudah di-approve.")
+            st.caption("Menampilkan total **IN / OUT / Retur** (approved) 3 bulan terakhir + grafik.")
             st.divider()
 
             df_inv, df_dash, month_labels = build_dashboard_3months_tables(data)
@@ -315,6 +377,9 @@ else:
                     st.metric(f"{lbl} • OUT", f"{total_out}")
                     st.metric(f"{lbl} • Retur", f"{total_ret}")
 
+            st.markdown("### Grafik")
+            dashboard_charts(df_dash, month_labels, df_inv)
+
             st.markdown("### Rekap Per Barang (3 Bulan Terakhir + Current Stock)")
             if df_dash.empty:
                 st.info("Belum ada data.")
@@ -327,14 +392,6 @@ else:
                     df_dash[ordered_cols].sort_values("Current Stock", ascending=False),
                     use_container_width=True, hide_index=True
                 )
-
-            st.divider()
-            st.markdown("### Top 5 Item dengan Current Stock Terbesar")
-            if df_inv.empty:
-                st.info("Inventory kosong.")
-            else:
-                df_top5 = df_inv.sort_values("Current Stock", ascending=False).head(5).reset_index(drop=True)
-                st.dataframe(df_top5, use_container_width=True, hide_index=True)
 
         elif menu == "Lihat Stok Barang":
             st.markdown(f"## Stok Barang - Brand {st.session_state.current_brand.capitalize()}")
@@ -517,16 +574,38 @@ else:
 
                 df_pending = pd.DataFrame(processed_requests)
                 df_pending["Lampiran"] = df_pending["attachment"].apply(lambda x: "Ada" if x else "Tidak Ada")
-                df_pending["Pilih"] = False
-                edited_df = st.data_editor(df_pending, use_container_width=True, hide_index=True)
-                selected_requests = edited_df.loc[(edited_df['Pilih']), :]
+
+                # ==== SELECT ALL STATE ====
+                if "approve_select_flags" not in st.session_state or len(st.session_state.approve_select_flags) != len(df_pending):
+                    st.session_state.approve_select_flags = [False] * len(df_pending)
+
+                csel1, csel2 = st.columns([1,1])
+                if csel1.button("Pilih semua"):
+                    st.session_state.approve_select_flags = [True]*len(df_pending)
+                if csel2.button("Kosongkan pilihan"):
+                    st.session_state.approve_select_flags = [False]*len(df_pending)
+
+                df_pending["Pilih"] = st.session_state.approve_select_flags
+
+                # Editor: hanya kolom "Pilih" yang boleh diubah
+                col_cfg = {"Pilih": st.column_config.CheckboxColumn("Pilih", default=False)}
+                for c in df_pending.columns:
+                    if c != "Pilih":
+                        col_cfg[c] = st.column_config.TextColumn(c, disabled=True)
+                edited_df = st.data_editor(df_pending, key="editor_admin_approve", use_container_width=True, hide_index=True, column_config=col_cfg)
+
+                # commit flags
+                st.session_state.approve_select_flags = edited_df["Pilih"].fillna(False).tolist()
+
+                selected_indices = [i for i, v in enumerate(st.session_state.approve_select_flags) if v]
 
                 col1, col2 = st.columns(2)
-                
                 if col1.button("Approve Selected"):
-                    if not selected_requests.empty:
-                        for _, req in selected_requests.iterrows():
-                            match_idx = next((i for i, r in enumerate(data["pending_requests"])
+                    if selected_indices:
+                        for i in selected_indices:
+                            req = processed_requests[i]
+                            # cari di pending_requests berdasar identifier yang aman
+                            match_idx = next((ix for ix, r in enumerate(data["pending_requests"])
                                               if r.get("item")==req.get("item")
                                               and r.get("qty")==req.get("qty")
                                               and r.get("user")==req.get("user")
@@ -559,47 +638,39 @@ else:
                                             "timestamp": timestamp()
                                         })
                         save_data(data, st.session_state.current_brand)
-                        st.session_state.notification = {"type": "success", "message": "Request terpilih berhasil di-approve."}
+                        st.session_state.notification = {"type": "success", "message": f"{len(selected_indices)} request di-approve."}
                         st.rerun()
                     else:
                         st.session_state.notification = {"type": "warning", "message": "Pilih setidaknya satu item untuk di-approve."}
                         st.rerun()
                 
                 if col2.button("Reject Selected"):
-                    if not selected_requests.empty:
-                        original_pending_requests = data["pending_requests"].copy()
+                    if selected_indices:
                         new_pending_requests = []
                         rejected_count = 0
-                        for original_req in original_pending_requests:
-                            is_selected_for_rejection = False
-                            for _, selected_req in selected_requests.iterrows():
-                                if (original_req["timestamp"] == selected_req["timestamp"] 
-                                    and original_req["user"] == selected_req["user"] 
-                                    and original_req["item"] == selected_req["item"]):
-                                    is_selected_for_rejection = True
-                                    rejected_count += 1
-                                    data["history"].append({
-                                        "action": f"REJECT_{original_req['type']}",
-                                        "item": original_req["item"],
-                                        "qty": original_req["qty"],
-                                        "stock": "-",
-                                        "unit": original_req.get("unit", "-"),
-                                        "user": original_req["user"],
-                                        "event": original_req.get("event", "-"),
-                                        "do_number": original_req.get("do_number", "-"),
-                                        "attachment": original_req.get("attachment"),
-                                        "date": original_req.get("date", None),
-                                        "code": original_req.get("code", None),
-                                        "trans_type": original_req.get("trans_type", None),
-                                        "timestamp": timestamp()
-                                    })
-                                    break
-                            if not is_selected_for_rejection:
+                        for ix, original_req in enumerate(data["pending_requests"]):
+                            if ix in selected_indices:
+                                rejected_count += 1
+                                data["history"].append({
+                                    "action": f"REJECT_{original_req['type']}",
+                                    "item": original_req["item"],
+                                    "qty": original_req["qty"],
+                                    "stock": "-",
+                                    "unit": original_req.get("unit", "-"),
+                                    "user": original_req["user"],
+                                    "event": original_req.get("event", "-"),
+                                    "do_number": original_req.get("do_number", "-"),
+                                    "attachment": original_req.get("attachment"),
+                                    "date": original_req.get("date", None),
+                                    "code": original_req.get("code", None),
+                                    "trans_type": original_req.get("trans_type", None),
+                                    "timestamp": timestamp()
+                                })
+                            else:
                                 new_pending_requests.append(original_req)
-                        
                         data["pending_requests"] = new_pending_requests
                         save_data(data, st.session_state.current_brand)
-                        st.session_state.notification = {"type": "success", "message": f"{rejected_count} request terpilih berhasil di-reject."}
+                        st.session_state.notification = {"type": "success", "message": f"{rejected_count} request di-reject."}
                         st.rerun()
                     else:
                         st.session_state.notification = {"type": "warning", "message": "Pilih setidaknya satu item untuk di-reject."}
@@ -731,7 +802,7 @@ else:
         # ----- Dashboard (User) -----
         if menu == "Dashboard":
             st.markdown(f"## Dashboard - Brand {st.session_state.current_brand.capitalize()}")
-            st.caption("Tiap bulan menampilkan total **IN / OUT / Retur** yang sudah di-approve.")
+            st.caption("Menampilkan total **IN / OUT / Retur** (approved) 3 bulan terakhir + grafik.")
             st.divider()
 
             df_inv, df_dash, month_labels = build_dashboard_3months_tables(data)
@@ -745,6 +816,9 @@ else:
                     st.metric(f"{lbl} • IN", f"{total_in}")
                     st.metric(f"{lbl} • OUT", f"{total_out}")
                     st.metric(f"{lbl} • Retur", f"{total_ret}")
+
+            st.markdown("### Grafik")
+            dashboard_charts(df_dash, month_labels, df_inv)
 
             st.markdown("### Rekap Per Barang (3 Bulan Terakhir + Current Stock)")
             if df_dash.empty:
@@ -765,14 +839,6 @@ else:
                     file_name=f"Dashboard_3_Bulan_{st.session_state.current_brand.capitalize()}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
-
-            st.divider()
-            st.markdown("### Top 5 Item dengan Current Stock Terbesar")
-            if df_inv.empty:
-                st.info("Inventory kosong.")
-            else:
-                df_top5 = df_inv.sort_values("Current Stock", ascending=False).head(5).reset_index(drop=True)
-                st.dataframe(df_top5, use_container_width=True, hide_index=True)
 
         # ----- Stock Card (User) -----
         elif menu == "Stock Card":
@@ -849,17 +915,29 @@ else:
                     })
                     st.success("Item IN ditambahkan ke daftar.")
 
+                # ===== SELECT ALL UNTUK IN =====
                 if st.session_state.req_in_items:
                     st.subheader("Daftar Item Request IN")
-                    df_in = pd.DataFrame(st.session_state.req_in_items)
-                    df_in["Pilih"] = False
-                    edited_df_in = st.data_editor(df_in, use_container_width=True, hide_index=True)
 
-                    selected_to_delete = edited_df_in.loc[(edited_df_in['Pilih']), :]
-                    if st.button("Hapus Item Terpilih"):
-                        if not selected_to_delete.empty:
-                            keep_mask = ~edited_df_in['Pilih'].fillna(False).values
-                            st.session_state.req_in_items = [rec for rec, keep in zip(st.session_state.req_in_items, keep_mask) if keep]
+                    if "in_select_flags" not in st.session_state or len(st.session_state.in_select_flags) != len(st.session_state.req_in_items):
+                        st.session_state.in_select_flags = [False]*len(st.session_state.req_in_items)
+
+                    cA, cB = st.columns([1,1])
+                    if cA.button("Pilih semua", key="in_sel_all"):
+                        st.session_state.in_select_flags = [True]*len(st.session_state.req_in_items)
+                    if cB.button("Kosongkan pilihan", key="in_sel_none"):
+                        st.session_state.in_select_flags = [False]*len(st.session_state.req_in_items)
+
+                    df_in = pd.DataFrame(st.session_state.req_in_items)
+                    df_in["Pilih"] = st.session_state.in_select_flags
+                    edited_df_in = st.data_editor(df_in, key="editor_in", use_container_width=True, hide_index=True)
+                    st.session_state.in_select_flags = edited_df_in["Pilih"].fillna(False).tolist()
+
+                    if st.button("Hapus Item Terpilih", key="delete_in"):
+                        mask = st.session_state.in_select_flags
+                        if any(mask):
+                            st.session_state.req_in_items = [rec for rec, keep in zip(st.session_state.req_in_items, [not x for x in mask]) if keep]
+                            st.session_state.in_select_flags = [False]*len(st.session_state.req_in_items)
                             st.rerun()
                         else:
                             st.info("Tidak ada baris yang dipilih.")
@@ -870,8 +948,8 @@ else:
                     uploaded_file = st.file_uploader("Upload PDF Delivery Order / Surat Jalan (wajib)", type=["pdf"])
                     
                     if st.button("Ajukan Request IN Terpilih"):
-                        mask = edited_df_in['Pilih'].fillna(False).values if not edited_df_in.empty else []
-                        if not mask.any():
+                        mask = st.session_state.in_select_flags
+                        if not any(mask):
                             st.warning("Pilih setidaknya satu item untuk diajukan.")
                         elif not do_number.strip():
                             st.error("Nomor Surat Jalan wajib diisi.")
@@ -886,9 +964,9 @@ else:
                                 f.write(uploaded_file.getbuffer())
 
                             submit_count = 0
-                            new_state = []
-                            for i, rec in enumerate(st.session_state.req_in_items):
-                                if mask[i]:
+                            new_state, new_flags = [], []
+                            for selected, rec in zip(mask, st.session_state.req_in_items):
+                                if selected:
                                     request_data = {
                                         "type": "IN",
                                         "item": rec["item"],
@@ -903,15 +981,16 @@ else:
                                     data["pending_requests"].append(request_data)
                                     submit_count += 1
                                 else:
-                                    new_state.append(rec)
+                                    new_state.append(rec); new_flags.append(False)
                             save_data(data, st.session_state.current_brand)
                             st.session_state.req_in_items = new_state
+                            st.session_state.in_select_flags = new_flags
                             st.success(f"{submit_count} request IN diajukan & menunggu approval.")
                             st.rerun()
             else:
                 st.info("Belum ada master barang. Silakan hubungi admin.")
 
-        # ----- Request Barang OUT (User) – WAJIB ISI -----
+        # ----- Request Barang OUT (User) – WAJIB ISI + SELECT ALL -----
         elif menu == "Request Barang OUT":
             st.markdown(f"## Request Barang Keluar (Multi Item) - Brand {st.session_state.current_brand.capitalize()}")
             st.divider()
@@ -950,7 +1029,7 @@ else:
                             })
                             st.success("Item OUT (manual) ditambahkan ke daftar.")
 
-                # ===== TAB 2: UPLOAD EXCEL (EVENT & TIPE WAJIB) =====
+                # ===== TAB 2: UPLOAD EXCEL =====
                 with tab2:
                     st.info("Format kolom wajib: **Tanggal | Kode Barang | Nama Barang | Qty | Event | Tipe** (Tipe = Support atau Penjualan)")
                     tmpl_bytes = make_out_template_bytes(data)
@@ -1038,35 +1117,45 @@ else:
                                     if errors:
                                         st.warning("Beberapa baris dilewati:\n- " + "\n- ".join(errors))
 
-                # ===== DAFTAR & SUBMIT OUT =====
+                # ===== DAFTAR & SUBMIT OUT (dengan PILIH SEMUA) =====
                 if st.session_state.req_out_items:
                     st.subheader("Daftar Item Request OUT")
                     df_out = pd.DataFrame(st.session_state.req_out_items)
                     pref_cols = [c for c in ["date","code","item","qty","unit","event","trans_type"] if c in df_out.columns]
                     df_out = df_out[pref_cols]
-                    df_out["Pilih"] = False
-                    edited_df_out = st.data_editor(df_out, use_container_width=True, hide_index=True)
 
-                    selected_to_delete = edited_df_out.loc[(edited_df_out['Pilih']), :]
+                    if "out_select_flags" not in st.session_state or len(st.session_state.out_select_flags) != len(st.session_state.req_out_items):
+                        st.session_state.out_select_flags = [False] * len(st.session_state.req_out_items)
+
+                    c1, c2 = st.columns([1,1])
+                    if c1.button("Pilih semua", key="out_sel_all"):
+                        st.session_state.out_select_flags = [True] * len(st.session_state.req_out_items)
+                    if c2.button("Kosongkan pilihan", key="out_sel_none"):
+                        st.session_state.out_select_flags = [False] * len(st.session_state.req_out_items)
+
+                    df_out["Pilih"] = st.session_state.out_select_flags
+                    edited_df_out = st.data_editor(df_out, key="editor_out", use_container_width=True, hide_index=True)
+                    st.session_state.out_select_flags = edited_df_out["Pilih"].fillna(False).tolist()
+
                     if st.button("Hapus Item Terpilih", key="delete_out"):
-                        if not selected_to_delete.empty:
-                            keep_mask = ~edited_df_out['Pilih'].fillna(False).values
-                            st.session_state.req_out_items = [rec for rec, keep in zip(st.session_state.req_out_items, keep_mask) if keep]
+                        mask = st.session_state.out_select_flags
+                        if any(mask):
+                            st.session_state.req_out_items = [rec for rec, keep in zip(st.session_state.req_out_items, [not x for x in mask]) if keep]
+                            st.session_state.out_select_flags = [False]*len(st.session_state.req_out_items)
                             st.rerun()
                         else:
                             st.info("Tidak ada baris yang dipilih untuk dihapus.")
 
                     st.divider()
                     if st.button("Ajukan Request OUT Terpilih"):
-                        mask = edited_df_out['Pilih'].fillna(False).values if not edited_df_out.empty else []
-                        if not mask.any():
+                        mask = st.session_state.out_select_flags
+                        if not any(mask):
                             st.warning("Pilih setidaknya satu item untuk diajukan.")
                         else:
-                            submit_count = 0
-                            new_state = []
-                            for i, rec in enumerate(st.session_state.req_out_items):
-                                if mask[i]:
-                                    # event & tipe sudah wajib diisi saat add ke daftar
+                            submitted = 0
+                            new_state, new_flags = [], []
+                            for selected, rec in zip(mask, st.session_state.req_out_items):
+                                if selected:
                                     request_data = {
                                         "type": "OUT",
                                         "date": rec.get("date", datetime.now().strftime("%Y-%m-%d")),
@@ -1082,17 +1171,19 @@ else:
                                         "timestamp": timestamp()
                                     }
                                     data["pending_requests"].append(request_data)
-                                    submit_count += 1
+                                    submitted += 1
                                 else:
-                                    new_state.append(rec)
+                                    new_state.append(rec); new_flags.append(False)
+
                             save_data(data, st.session_state.current_brand)
                             st.session_state.req_out_items = new_state
-                            st.success(f"{submit_count} request OUT diajukan & menunggu approval.")
+                            st.session_state.out_select_flags = new_flags
+                            st.success(f"{submitted} request OUT diajukan & menunggu approval.")
                             st.rerun()
             else:
                 st.info("Belum ada master barang. Silakan hubungi admin.")
 
-        # ----- Request Retur (User) -----
+        # ----- Request Retur (User) – SELECT ALL -----
         elif menu == "Request Retur":
             st.markdown(f"## Request Retur (Pengembalian ke Gudang) - Brand {st.session_state.current_brand.capitalize()}")
             st.divider()
@@ -1130,24 +1221,38 @@ else:
 
                 if st.session_state.req_ret_items:
                     st.subheader("Daftar Item Request Retur")
-                    df_ret = pd.DataFrame(st.session_state.req_ret_items)
-                    df_ret["Pilih"] = False
-                    edited_df_ret = st.data_editor(df_ret, use_container_width=True, hide_index=True)
 
-                    selected_to_delete = edited_df_ret.loc[(edited_df_ret['Pilih']), :]
+                    if "ret_select_flags" not in st.session_state or len(st.session_state.ret_select_flags) != len(st.session_state.req_ret_items):
+                        st.session_state.ret_select_flags = [False]*len(st.session_state.req_ret_items)
+
+                    cR1, cR2 = st.columns([1,1])
+                    if cR1.button("Pilih semua", key="ret_sel_all"):
+                        st.session_state.ret_select_flags = [True]*len(st.session_state.req_ret_items)
+                    if cR2.button("Kosongkan pilihan", key="ret_sel_none"):
+                        st.session_state.ret_select_flags = [False]*len(st.session_state.req_ret_items)
+
+                    df_ret = pd.DataFrame(st.session_state.req_ret_items)
+                    df_ret["Pilih"] = st.session_state.ret_select_flags
+                    edited_df_ret = st.data_editor(df_ret, key="editor_ret", use_container_width=True, hide_index=True)
+                    st.session_state.ret_select_flags = edited_df_ret["Pilih"].fillna(False).tolist()
+
                     if st.button("Hapus Item Terpilih", key="delete_ret"):
-                        keep_mask = ~edited_df_ret['Pilih'].fillna(False).values
-                        st.session_state.req_ret_items = [rec for rec, keep in zip(st.session_state.req_ret_items, keep_mask) if keep]
-                        st.rerun()
+                        mask = st.session_state.ret_select_flags
+                        if any(mask):
+                            st.session_state.req_ret_items = [rec for rec, keep in zip(st.session_state.req_ret_items, [not x for x in mask]) if keep]
+                            st.session_state.ret_select_flags = [False]*len(st.session_state.req_ret_items)
+                            st.rerun()
+                        else:
+                            st.info("Tidak ada baris yang dipilih.")
 
                     st.divider()
                     if st.button("Ajukan Request Retur Terpilih"):
-                        mask = edited_df_ret['Pilih'].fillna(False).values if not edited_df_ret.empty else []
-                        if not mask.any():
+                        mask = st.session_state.ret_select_flags
+                        if not any(mask):
                             st.warning("Pilih setidaknya satu item untuk diajukan.")
                         else:
-                            for i, rec in enumerate(st.session_state.req_ret_items):
-                                if mask[i]:
+                            for selected, rec in zip(mask, st.session_state.req_ret_items):
+                                if selected:
                                     request_data = {
                                         "type": "RETURN",
                                         "item": rec["item"],
@@ -1161,7 +1266,8 @@ else:
                                     }
                                     data["pending_requests"].append(request_data)
                             save_data(data, st.session_state.current_brand)
-                            st.session_state.req_ret_items = [rec for i, rec in enumerate(st.session_state.req_ret_items) if not mask[i]]
+                            st.session_state.req_ret_items = [rec for rec, keep in zip(st.session_state.req_ret_items, [not x for x in mask]) if keep]
+                            st.session_state.ret_select_flags = [False]*len(st.session_state.req_ret_items)
                             st.success("Request RETUR diajukan & menunggu approval.")
                             st.rerun()
             else:
@@ -1172,7 +1278,6 @@ else:
             st.markdown(f"## Riwayat Saya (dengan Status) - Brand {st.session_state.current_brand.capitalize()}")
             st.divider()
 
-            # Approved/Rejected dari history
             hist = data.get("history", [])
             my_hist = [h for h in hist if h.get("user") == st.session_state.username and isinstance(h.get("action",""), str)]
             rows = []
@@ -1194,7 +1299,6 @@ else:
                     "Timestamp": h.get("timestamp","-")
                 })
 
-            # Pending dari pending_requests
             pend = data.get("pending_requests", [])
             my_pend = [p for p in pend if p.get("user") == st.session_state.username]
             for p in my_pend:
@@ -1214,7 +1318,6 @@ else:
 
             if rows:
                 df_rows = pd.DataFrame(rows)
-                # urutkan baru -> lama berdasarkan Timestamp jika ada
                 try:
                     df_rows["ts"] = pd.to_datetime(df_rows["Timestamp"], errors="coerce")
                     df_rows = df_rows.sort_values("ts", ascending=False).drop(columns=["ts"])
