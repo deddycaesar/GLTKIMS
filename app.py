@@ -1151,7 +1151,7 @@ else:
                             st.session_state.out_select_flags = [False]*len(st.session_state.req_out_items)
                             st.rerun()
                         else:
-                            st.info("Tidak ada baris yang dipilih untuk dihapus.")
+                            st.info("Tidak ada baris yang dipilih.")
 
                     st.divider()
                     if st.button("Ajukan Request OUT Terpilih"):
@@ -1290,12 +1290,12 @@ else:
             rows = []
             for h in my_hist:
                 act = h["action"].upper()
-                status = "APPROVED" if act.startswith("APPROVE_"):
+                if act.startswith("APPROVE_"):
                     status = "APPROVED"
                     ttype = act.split("_", 1)[-1]  # IN / OUT / RETURN
                 elif act.startswith("REJECT_"):
                     status = "REJECTED"
-                    ttype = act.split("_", 1)[-1]  # IN / OUT / RETURN
+                    ttype = act.split("_", 1)[-1]
                 elif act.startswith("ADD_"):
                     status = "-"
                     ttype = "ADD"
@@ -1337,7 +1337,6 @@ else:
 
             if rows:
                 df_rows = pd.DataFrame(rows)
-                # urutkan terbaru di atas
                 try:
                     df_rows["ts"] = pd.to_datetime(df_rows["Timestamp"], errors="coerce")
                     df_rows = df_rows.sort_values("ts", ascending=False).drop(columns=["ts"])
