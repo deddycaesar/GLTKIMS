@@ -1289,8 +1289,8 @@ else:
             my_hist = [h for h in hist if h.get("user") == st.session_state.username and isinstance(h.get("action",""), str)]
             rows = []
             for h in my_hist:
-                                act = h["action"].upper()
-                if act.startswith("APPROVE_"):
+                act = h["action"].upper()
+                status = "APPROVED" if act.startswith("APPROVE_"):
                     status = "APPROVED"
                     ttype = act.split("_", 1)[-1]  # IN / OUT / RETURN
                 elif act.startswith("REJECT_"):
@@ -1346,4 +1346,3 @@ else:
                 st.dataframe(df_rows, use_container_width=True, hide_index=True)
             else:
                 st.info("Anda belum memiliki riwayat transaksi.")
-
