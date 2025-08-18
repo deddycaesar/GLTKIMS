@@ -128,12 +128,23 @@ def build_dashboard_3months_tables(data) -> tuple:
         all_items |= set(df_hist.get("item", pd.Series([], dtype=str)).dropna().astype(str).tolist())
     all_items = sorted(list(all_items))
 
-    # Tanggal efektif
+    # Tanggal efektif (robust): selalu jadikan Series sepanjang df_hist
     if not df_hist.empty:
         df_hist["qty"] = pd.to_numeric(df_hist.get("qty", 0), errors="coerce").fillna(0).astype(int)
-        d1 = pd.to_datetime(df_hist.get("date", pd.NaT), errors="coerce")
-        d2 = pd.to_datetime(df_hist.get("timestamp", pd.NaT), errors="coerce").dt.floor("D")
-        df_hist["eff_date"] = d1.fillna(d2)
+
+        # Pastikan dua-duanya Series dengan index df_hist.index
+        if "date" in df_hist.columns:
+            s_date = pd.to_datetime(df_hist["date"], errors="coerce")
+        else:
+            s_date = pd.Series(pd.NaT, index=df_hist.index)
+
+        if "timestamp" in df_hist.columns:
+            s_ts = pd.to_datetime(df_hist["timestamp"], errors="coerce").dt.floor("D")
+        else:
+            s_ts = pd.Series(pd.NaT, index=df_hist.index)
+
+        # Pakai date jika ada; kalau NaT pakai tanggal dari timestamp
+        df_hist["eff_date"] = s_date.fillna(s_ts)
         df_hist["ACTION_UP"] = df_hist["action"].astype(str).str.upper()
     else:
         df_hist = pd.DataFrame(columns=["item","qty","eff_date","ACTION_UP"])
@@ -178,6 +189,7 @@ def build_dashboard_3months_tables(data) -> tuple:
             df_dash[c] = pd.to_numeric(df_dash[c], errors="coerce").fillna(0).astype(int)
 
     return df_inv, df_dash, month_labels
+
 # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 
 def dataframe_to_excel_bytes(df: pd.DataFrame, sheet_name="Sheet1") -> bytes:
@@ -1345,3 +1357,4 @@ else:
                 st.dataframe(df_rows, use_container_width=True, hide_index=True)
             else:
                 st.info("Anda belum memiliki riwayat transaksi.")
+
