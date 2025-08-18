@@ -86,85 +86,53 @@ def month_label(dt: pd.Timestamp) -> str:
     return f"{ID_MONTHS[dt.month-1]} {dt.year}"
 
 def build_dashboard_3months_tables(data) -> tuple:
-    """
-    Dashboard 3 bulan terakhir:
-    - Gunakan 'date' (YYYY-MM-DD) bila ada sebagai tanggal transaksi.
-    - Jika 'date' kosong/invalid, pakai tanggal dari 'timestamp' (tanpa jam).
-    - Agregasi IN/OUT/Retur per bulan berdasarkan tanggal efektif di atas.
-    """
-    # --- Inventory sekarang (untuk current stock & top 5) ---
     inv_records = [
         {"Kode": code, "Nama Barang": item.get("name", "-"), "Current Stock": int(item.get("qty", 0))}
         for code, item in data.get("inventory", {}).items()
     ]
-    df_inv = pd.DataFrame(inv_records) if inv_records else pd.DataFrame(
-        columns=["Kode","Nama Barang","Current Stock"]
-    )
+    df_inv = pd.DataFrame(inv_records) if inv_records else pd.DataFrame(columns=["Kode","Nama Barang","Current Stock"])
 
-    # --- History (yang sudah APPROVE/REJECT/ADD) ---
     hist = data.get("history", [])
-    df_hist = pd.DataFrame(hist) if hist else pd.DataFrame(
-        columns=["action","item","qty","timestamp","date"]
-    )
+    df_hist = pd.DataFrame(hist) if hist else pd.DataFrame(columns=["action","item","qty","timestamp"])
 
-    # Jika tidak ada data sama sekali
-    if df_inv.empty and df_hist.empty:
-        now = pd.Timestamp.now()
-        this_month_start = pd.Timestamp(year=now.year, month=now.month, day=1)
-        month_starts = [this_month_start,
-                        this_month_start - pd.DateOffset(months=1),
-                        this_month_start - pd.DateOffset(months=2)]
-        month_labels = [month_label(ms) for ms in month_starts]
+    now = pd.Timestamp.now()
+    this_month_start = pd.Timestamp(year=now.year, month=now.month, day=1)
+    month_starts = [this_month_start, this_month_start - pd.DateOffset(months=1), this_month_start - pd.DateOffset(months=2)]
+    month_labels = [month_label(ms) for ms in month_starts]
+
+    all_items = set(df_inv["Nama Barang"].tolist()) if not df_inv.empty else set()
+    if not df_hist.empty:
+        all_items |= set(df_hist.get("item", pd.Series([], dtype=str)).dropna().astype(str).tolist())
+    all_items = sorted(list(all_items))
+
+    if len(all_items) == 0:
         empty_cols = []
         for lbl in month_labels:
             empty_cols += [f"{lbl} IN", f"{lbl} OUT", f"{lbl} Retur"]
         df_dash = pd.DataFrame(columns=["Nama Barang"] + empty_cols + ["Current Stock"])
         return df_inv, df_dash, month_labels
 
-    # --- Siapkan daftar item unik (gabungan inventory & history) ---
-    all_items = set(df_inv["Nama Barang"].tolist()) if not df_inv.empty else set()
     if not df_hist.empty:
-        all_items |= set(df_hist.get("item", pd.Series([], dtype=str)).dropna().astype(str).tolist())
-    all_items = sorted(list(all_items))
-
-    # --- Tanggal efektif (pakai 'date' jika ada; else tanggal dari 'timestamp') ---
-    if not df_hist.empty:
-        # qty aman sebagai int
         df_hist["qty"] = pd.to_numeric(df_hist.get("qty", 0), errors="coerce").fillna(0).astype(int)
-        # parse 'date' (YYYY-MM-DD) → datetime
-        d1 = pd.to_datetime(df_hist.get("date", pd.NaT), errors="coerce")
-        # parse 'timestamp' → datetime, lalu ambil tanggalnya (floor ke hari)
-        d2 = pd.to_datetime(df_hist.get("timestamp", pd.NaT), errors="coerce").dt.floor("D")
-        # effective date: prioritas date (d1), kalau NaT pakai d2
-        df_hist["eff_date"] = d1.fillna(d2)
-        # normalisasi action
+        df_hist["timestamp"] = pd.to_datetime(df_hist.get("timestamp", pd.NaT), errors="coerce")
         df_hist["ACTION_UP"] = df_hist["action"].astype(str).str.upper()
     else:
-        df_hist = pd.DataFrame(columns=["item","qty","eff_date","ACTION_UP"])
+        df_hist = pd.DataFrame(columns=["item","qty","timestamp","ACTION_UP"])
 
-    # --- 3 bulan terakhir relatif ke hari ini (bukan ke tanggal di data) ---
-    now = pd.Timestamp.now()
-    this_month_start = pd.Timestamp(year=now.year, month=now.month, day=1)
-    month_starts = [this_month_start,
-                    this_month_start - pd.DateOffset(months=1),
-                    this_month_start - pd.DateOffset(months=2)]
-    month_labels = [month_label(ms) for ms in month_starts]
-
-    # --- Bangun tabel rekap per barang untuk 3 bulan ---
     df_dash = pd.DataFrame({"Nama Barang": all_items})
 
     for ms in month_starts:
         next_ms = ms + pd.offsets.MonthBegin(1)
         lbl = month_label(ms)
-
-        # filter berdasarkan tanggal efektif (bukan timestamp)
-        m = df_hist[(df_hist["eff_date"] >= ms) & (df_hist["eff_date"] < next_ms)].copy()
+        m = df_hist[(df_hist["timestamp"] >= ms) & (df_hist["timestamp"] < next_ms)].copy()
         if not m.empty:
-            m["IN_QTY"]  = m.apply(lambda r: r["qty"] if "APPROVE_IN" in r["ACTION_UP"] else 0, axis=1)
-            m["OUT_QTY"] = m.apply(lambda r: r["qty"] if "APPROVE_OUT" in r["ACTION_UP"] else 0, axis=1)
-            m["RET_QTY"] = m.apply(lambda r: r["qty"] if "APPROVE_RETURN" in r["ACTION_UP"] or "RETURN" in r["ACTION_UP"] else 0, axis=1)
+            m["IN_QTY"]   = m.apply(lambda r: r["qty"] if "APPROVE_IN" in r["ACTION_UP"] else 0, axis=1)
+            m["OUT_QTY"]  = m.apply(lambda r: r["qty"] if "APPROVE_OUT" in r["ACTION_UP"] else 0, axis=1)
+            m["RET_QTY"]  = m.apply(lambda r: r["qty"] if "APPROVE_RETURN" in r["ACTION_UP"] or "RETURN" in r["ACTION_UP"] else 0, axis=1)
             g = (m.groupby("item", dropna=False)[["IN_QTY","OUT_QTY","RET_QTY"]]
-                   .sum().reset_index().rename(columns={"item":"Nama Barang"}))
+                   .sum()
+                   .reset_index()
+                   .rename(columns={"item":"Nama Barang"}))
         else:
             g = pd.DataFrame(columns=["Nama Barang","IN_QTY","OUT_QTY","RET_QTY"])
 
@@ -175,19 +143,16 @@ def build_dashboard_3months_tables(data) -> tuple:
             "RET_QTY": f"{lbl} Retur"
         }, inplace=True)
 
-    # --- Tambahkan current stock ---
     if not df_inv.empty:
         df_dash = df_dash.merge(df_inv[["Nama Barang","Current Stock"]], on="Nama Barang", how="left")
     else:
         df_dash["Current Stock"] = 0
 
-    # Pastikan kolom angka terisi int
     for c in df_dash.columns:
         if c != "Nama Barang":
             df_dash[c] = pd.to_numeric(df_dash[c], errors="coerce").fillna(0).astype(int)
 
     return df_inv, df_dash, month_labels
-
 
 def dataframe_to_excel_bytes(df: pd.DataFrame, sheet_name="Sheet1") -> bytes:
     output = BytesIO()
@@ -1361,4 +1326,3 @@ else:
                 st.dataframe(df_rows, use_container_width=True, hide_index=True)
             else:
                 st.info("Anda belum memiliki riwayat transaksi.")
-
