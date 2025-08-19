@@ -708,35 +708,51 @@ else:
             st.divider()
             tab1, tab2 = st.tabs(["Input Manual", "Upload Excel"])
 
-            with tab1:
-                code_input = st.text_input("Kode Barang (unik & wajib)", placeholder="Misal: ITM-0001")
-                name = st.text_input("Nama Barang")
-                unit = st.text_input("Satuan (misal: pcs, box, liter)")
-                qty = st.number_input("Jumlah Stok Awal", min_value=0, step=1)
-                category = st.text_input("Kategori Barang", placeholder="Misal: Minuman, Makanan")
+            # ----- INPUT MANUAL (wajib event & tipe) -----
+with tab1:
+    col1, col2 = st.columns(2)
+    idx = col1.selectbox(
+        "Pilih Barang", range(len(items)),
+        format_func=lambda x: f"{items[x]['name']} (Stok: {items[x]['qty']} {items[x].get('unit', '-')})"
+    )
 
-                if st.button("Tambah Barang Manual"):
-                    if not code_input.strip():
-                        st.error("Kode Barang wajib diisi.")
-                    elif code_input in data["inventory"]:
-                        st.error(f"Kode Barang '{code_input}' sudah ada.")
-                    elif not name.strip():
-                        st.error("Nama barang wajib diisi.")
-                    else:
-                        data["inventory"][code_input] = {"name": name.strip(), "qty": int(qty), "unit": unit.strip() if unit else "-", "category": category.strip() if category else "Uncategorized"}
-                        data["history"].append({
-                            "action": "ADD_ITEM",
-                            "item": name.strip(),
-                            "qty": int(qty),
-                            "stock": int(qty),
-                            "unit": unit.strip() if unit else "-",
-                            "user": st.session_state.username,
-                            "event": "-",
-                            "timestamp": timestamp()
-                        })
-                        save_data(data, st.session_state.current_brand)
-                        st.success(f"Barang '{name}' berhasil ditambahkan dengan kode {code_input}")
-                        st.rerun()
+    # stok aman (handle None)
+    max_qty = int(pd.to_numeric(items[idx].get("qty", 0), errors="coerce") or 0)
+
+    # qty input: kunci jika stok 0
+    if max_qty < 1:
+        qty = 0
+        col2.number_input("Jumlah", min_value=0, max_value=0, step=1, value=0, disabled=True)
+        st.warning("Stok item ini 0. Tidak bisa menambah request OUT.")
+    else:
+        qty = col2.number_input("Jumlah", min_value=1, max_value=max_qty, step=1)
+
+    tipe = st.selectbox("Tipe Transaksi (wajib)", TRANS_TYPES, index=0)
+    event_manual = st.text_input("Nama Event (wajib)", placeholder="Misal: Pameran, Acara Kantor")
+
+    if st.button("Tambah Item OUT (Manual)"):
+        if max_qty < 1:
+            st.error("Stok 0 — tidak bisa menambah OUT untuk item ini.")
+        elif not event_manual.strip():
+            st.error("Event wajib diisi.")
+        elif qty < 1:
+            st.error("Jumlah harus minimal 1.")
+        else:
+            selected_name = items[idx]["name"]
+            found_code = next((code for code, it in data["inventory"].items() if it.get("name") == selected_name), None)
+            base = {
+                "date": datetime.now().strftime("%Y-%m-%d"),
+                "code": found_code if found_code else "-",
+                "item": selected_name,
+                "qty": qty,
+                "unit": items[idx].get("unit", "-"),
+                "event": event_manual.strip(),
+                "trans_type": tipe,
+                "user": st.session_state.username,
+            }
+            st.session_state.req_out_items.append(normalize_out_record(base))
+            st.success("Item OUT (manual) ditambahkan ke daftar.")
+
 
             with tab2:
                 st.info("Format Excel: **Kode Barang | Nama Barang | Qty | Satuan | Kategori**")
@@ -1659,3 +1675,4 @@ else:
                 st.dataframe(df_rows, use_container_width=True, hide_index=True)
             else:
                 st.info("Anda belum memiliki riwayat transaksi.")
+
