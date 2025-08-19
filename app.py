@@ -440,9 +440,15 @@ def _gauge(value, max_value, title):
         st.metric(title, f"{value:.2f}")
 
 def render_dashboard_pro(data: dict, brand_label: str, allow_download=True):
+    """Dashboard interaktif:
+       - 3 grafik sejajar: IN / OUT / RETURN per bulan (urut)
+       - Top 10 Current Stock (nama item)
+       - Top 5 Event OUT
+       - Reorder insight berdasar OUT 3 bulan terakhir
+    """
     df_hist = _prepare_history_df(data)
     inv_records = [
-        {"Kode": code, "Nama Barang": it.get("name","-"), "Current Stock": int(it.get("qty",0))}
+        {"Kode": code, "Nama Barang": it.get("name","-"), "Current Stock": int(it.get("qty",0)), "Unit": it.get("unit","-")}
         for code, it in data.get("inventory", {}).items()
     ]
     df_inv = pd.DataFrame(inv_records)
@@ -451,170 +457,177 @@ def render_dashboard_pro(data: dict, brand_label: str, allow_download=True):
     st.caption("Semua metrik berbasis jumlah (qty). *Sales* = OUT dengan tipe **Penjualan**.")
     st.divider()
 
-    # -------- Filter --------
+    # -------- Filter global (default 12 bulan terakhir) --------
     today = pd.Timestamp.today().normalize()
-    default_start = today - pd.Timedelta(days=179)
-    f1, f2, f3 = st.columns([1,1,1])
-    start_date = f1.date_input("Tanggal mulai", value=default_start.date())
-    end_date   = f2.date_input("Tanggal akhir", value=today.date())
-    group_by   = f3.radio("Agregasi", ["Bulanan","Mingguan","Harian"], horizontal=True, index=0)
+    default_start = (today - pd.DateOffset(months=11)).replace(day=1)
+    colF1, colF2 = st.columns(2)
+    start_date = colF1.date_input("Tanggal mulai", value=default_start.date())
+    end_date   = colF2.date_input("Tanggal akhir", value=today.date())
 
-    # -------- KPI --------
-    k = _calc_kpi(df_hist, df_inv, start_date, end_date)
-    kcol = st.columns(5)
-    with kcol[0]: _kpi_card("Inventory Units", f"{k['total_units']:,}", f"Change (vs prev): {k['cur_sales']-k['prev_sales']:+,} penjualan")
-    with kcol[1]: _kpi_card("Stock Available (SKU)", f"{k['total_skus']:,}", f"Sales (periode ini): {k['cur_sales']:,}")
-    with kcol[2]: _gauge(k["turnover"], 2.0, "Turnover Ratio (≈ sales/inventory)")
-    with kcol[3]: _gauge(k["inv_to_sales"], 5.0, "Inventory → Sales Ratio")
-    with kcol[4]: _gauge(k["days_supply"], 120.0, "Avg Days of Supply")
-
-    st.divider()
-
-    # -------- Data periode --------
+    # Data pada rentang
     if not df_hist.empty:
         mask = (df_hist["date_eff"] >= pd.Timestamp(start_date)) & (df_hist["date_eff"] <= pd.Timestamp(end_date))
         df_range = df_hist.loc[mask].copy()
     else:
         df_range = pd.DataFrame(columns=["date_eff","type_norm","qty","item","event","trans_type"])
 
-    # periode kolom
-    if not df_range.empty:
-        if group_by == "Bulanan":
-            df_range["periode"] = df_range["date_eff"].dt.to_period("M").dt.to_timestamp()
-            fmts = "%b %Y"
-        elif group_by == "Mingguan":
-            df_range["periode"] = df_range["date_eff"] - pd.to_timedelta(df_range["date_eff"].dt.weekday, unit="D")
-            fmts = "Minggu %d %b %Y"
-        else:
-            df_range["periode"] = df_range["date_eff"]
-            fmts = "%d %b %Y"
+    # Helper agregasi bulanan (urut)
+    def month_agg(df, tipe):
+        d = df[df["type_norm"]==tipe].copy()
+        if d.empty:
+            return pd.DataFrame({"month": [], "qty": []})
+        d["month"] = d["date_eff"].dt.to_period("M").dt.to_timestamp()  # Awal bulan
+        g = d.groupby("month", as_index=False)["qty"].sum().sort_values("month")
+        return g
 
-    # -------- Grafik Row 1 --------
-    g1, g2, g3 = st.columns([1.15, 1, 1])
-    with g1:
-        st.markdown('<div class="card"><div class="smallcap">Inventory Value (Qty) Over Time</div>', unsafe_allow_html=True)
-        if not df_range.empty and _ALT_OK:
-            g = (df_range.groupby(["periode"], dropna=False)["qty"].sum().reset_index())
-            g["Periode"] = g["periode"].dt.strftime(fmts)
-            chart = alt.Chart(g).mark_bar().encode(
-                x=alt.X("Periode:N", title="Periode"),
-                y=alt.Y("qty:Q", title="Total Qty (IN+OUT+RETURN)"),
-                tooltip=["Periode","qty"]
-            ).properties(height=250)
-            st.altair_chart(chart, use_container_width=True)
-        else:
-            st.info("Belum ada data.")
-        st.markdown("</div>", unsafe_allow_html=True)
+    g_in  = month_agg(df_range, "IN")
+    g_out = month_agg(df_range, "OUT")
+    g_ret = month_agg(df_range, "RETURN")
 
-    with g2:
-        st.markdown('<div class="card"><div class="smallcap">Turnover (Days) by Month</div>', unsafe_allow_html=True)
-        if not df_range.empty and _ALT_OK:
-            # days ≈ inventory / sales_per_day (per periode). inventory = total_units (sederhana).
-            sales = (df_range[(df_range["type_norm"]=="OUT") & (df_range["trans_type"]=="Penjualan")]
-                     .groupby("periode")["qty"].sum().reset_index())
-            if not sales.empty:
-                sales["days"] = sales["qty"].apply(lambda x: (k["total_units"] / (x/30)) if x>0 else None)
-                sales["Periode"] = sales["periode"].dt.strftime(fmts)
-                line = alt.Chart(sales).mark_line(point=True).encode(
-                    x="Periode:N", y=alt.Y("days:Q", title="Days"), tooltip=["Periode","days"]
-                ).properties(height=250)
-                st.altair_chart(line, use_container_width=True)
+    # -------- Row 1: IN/OUT/RETURN per month --------
+    c1, c2, c3 = st.columns(3)
+    def _month_bar(container, dfm, title, color="#0EA5E9"):
+        with container:
+            st.markdown(f'<div class="card"><div class="smallcap">{title}</div>', unsafe_allow_html=True)
+            if _ALT_OK and not dfm.empty:
+                chart = (
+                    alt.Chart(dfm)
+                    .mark_bar()
+                    .encode(
+                        x=alt.X("month:T", title="Periode", axis=alt.Axis(format="%b %Y")),
+                        y=alt.Y("qty:Q", title="Qty"),
+                        tooltip=[alt.Tooltip("month:T", title="Periode", format="%b %Y"), "qty:Q"],
+                        color=alt.value(color)
+                    )
+                    .properties(height=260)
+                )
+                st.altair_chart(chart, use_container_width=True)
             else:
-                st.info("Belum ada OUT (Penjualan) di rentang ini.")
-        else:
-            st.info("Belum ada data.")
-        st.markdown("</div>", unsafe_allow_html=True)
+                if dfm.empty: st.info("Belum ada data.")
+                else: st.bar_chart(dfm.set_index("month")["qty"])
+            st.markdown("</div>", unsafe_allow_html=True)
 
-    with g3:
-        st.markdown('<div class="card"><div class="smallcap">Top 10 Items Based on Current Stock</div>', unsafe_allow_html=True)
-        if not df_inv.empty and _ALT_OK:
+    _month_bar(c1, g_in,  "IN per Month",    "#22C55E")
+    _month_bar(c2, g_out, "OUT per Month",   "#EF4444")
+    _month_bar(c3, g_ret, "RETUR per Month", "#0EA5E9")
+
+    st.divider()
+
+    # -------- Row 2: Top 10 current stock & Top 5 event OUT --------
+    t1, t2 = st.columns([1,1])
+    with t1:
+        st.markdown('<div class="card"><div class="smallcap">Top 10 Items (Current Stock)</div>', unsafe_allow_html=True)
+        if _ALT_OK and not df_inv.empty:
             top10 = df_inv.sort_values("Current Stock", ascending=False).head(10)
-            chart = alt.Chart(top10).mark_bar().encode(
-                y=alt.Y("Nama Barang:N", sort="-x", title=None),
-                x=alt.X("Current Stock:Q", title="Qty"),
-                tooltip=["Nama Barang","Current Stock"]
-            ).properties(height=250)
+            chart = (
+                alt.Chart(top10)
+                .mark_bar()
+                .encode(
+                    y=alt.Y("Nama Barang:N", sort="-x", title=None),
+                    x=alt.X("Current Stock:Q", title="Qty"),
+                    tooltip=["Nama Barang","Current Stock"]
+                )
+                .properties(height=300)
+            )
             st.altair_chart(chart, use_container_width=True)
         else:
-            st.info("Inventory kosong.")
+            if df_inv.empty: st.info("Inventory kosong.")
+            else: st.dataframe(df_inv.sort_values("Current Stock", ascending=False).head(10), use_container_width=True, hide_index=True)
         st.markdown("</div>", unsafe_allow_html=True)
 
-    # -------- Grafik Row 2 --------
-    h1, h2 = st.columns([1.1,1])
-    with h1:
-        st.markdown('<div class="card"><div class="smallcap">Inventory Movement (IN / OUT / RETURN)</div>', unsafe_allow_html=True)
-        if not df_range.empty:
-            grp = (df_range.groupby(["periode","type_norm"])["qty"].sum().reset_index())
-            grp["Periode"] = grp["periode"].dt.strftime(fmts)
-            if _ALT_OK:
-                bar = alt.Chart(grp).mark_bar().encode(
-                    x=alt.X("Periode:N", title="Periode"),
-                    y=alt.Y("qty:Q", title="Qty"),
-                    color=alt.Color("type_norm:N", title="Tipe", scale=alt.Scale(domain=["IN","OUT","RETURN"], range=["#22C55E","#EF4444","#0EA5E9"])),
-                    tooltip=["Periode","type_norm","qty"]
-                ).properties(height=280)
-                st.altair_chart(bar, use_container_width=True)
-            else:
-                st.bar_chart(grp.pivot(index="Periode", columns="type_norm", values="qty").fillna(0))
+    with t2:
+        st.markdown('<div class="card"><div class="smallcap">Top 5 Event by OUT Qty</div>', unsafe_allow_html=True)
+        df_ev = df_range[(df_range["type_norm"]=="OUT") & (df_range["event"].notna())].copy()
+        df_ev = df_ev[df_ev["event"].astype(str).str.strip().ne("-")]
+        ev_top = (df_ev.groupby("event", as_index=False)["qty"].sum()
+                  .sort_values("qty", ascending=False).head(5))
+        if _ALT_OK and not ev_top.empty:
+            chart = (
+                alt.Chart(ev_top)
+                .mark_bar()
+                .encode(
+                    y=alt.Y("event:N", sort="-x", title="Event"),
+                    x=alt.X("qty:Q", title="Qty"),
+                    tooltip=["event","qty"]
+                )
+                .properties(height=300)
+            )
+            st.altair_chart(chart, use_container_width=True)
         else:
-            st.info("Belum ada data.")
-        st.markdown("</div>", unsafe_allow_html=True)
-
-    with h2:
-        st.markdown('<div class="card"><div class="smallcap">Inventory to Sales Analysis</div>', unsafe_allow_html=True)
-        if not df_range.empty:
-            # Inventory (gunakan stok sekarang sebagai baseline) vs Sales (OUT Penjualan) per periode
-            inv_df = (df_range.groupby("periode")["qty"].sum().reset_index())
-            inv_df["Inventory"] = k["total_units"]  # baseline sederhana
-            sales_df = (df_range[(df_range["type_norm"]=="OUT") & (df_range["trans_type"]=="Penjualan")]
-                        .groupby("periode")["qty"].sum().reset_index().rename(columns={"qty":"Sales"}))
-            merged = inv_df[["periode","Inventory"]].merge(sales_df, on="periode", how="left").fillna(0)
-            merged["Ratio"] = merged.apply(lambda r: (r["Inventory"]/r["Sales"]) if r["Sales"]>0 else None, axis=1)
-            merged["Periode"] = merged["periode"].dt.strftime(fmts)
-            if _ALT_OK:
-                base = alt.Chart(merged).properties(height=280)
-                bars = base.mark_bar().encode(x="Periode:N", y=alt.Y("Inventory:Q", title="Qty"), tooltip=["Periode","Inventory"])
-                line = base.mark_line(point=True, color="#1D4ED8").encode(x="Periode:N", y=alt.Y("Sales:Q"), tooltip=["Periode","Sales"])
-                ratio = base.mark_line(point=True, color="#F59E0B").encode(x="Periode:N", y=alt.Y("Ratio:Q"), tooltip=["Periode","Ratio"])
-                st.altair_chart(bars + line + ratio, use_container_width=True)
-            else:
-                st.dataframe(merged[["Periode","Inventory","Sales","Ratio"]], use_container_width=True, hide_index=True)
-        else:
-            st.info("Belum ada data.")
+            if ev_top.empty: st.info("Belum ada OUT pada rentang ini.")
+            else: st.dataframe(ev_top.rename(columns={"event":"Event","qty":"Qty"}), use_container_width=True, hide_index=True)
         st.markdown("</div>", unsafe_allow_html=True)
 
     st.divider()
-    # -------- Ringkasan per item + download --------
-    st.subheader("Ringkasan per Item (periode terpilih)")
-    if not df_range.empty:
-        pivot = (df_range.pivot_table(index="item", columns="type_norm", values="qty", aggfunc="sum", fill_value=0)
-                 .reset_index().rename(columns={"item":"Nama Barang"}))
-        for col in ["IN","OUT","RETURN"]:
-            if col not in pivot.columns: pivot[col] = 0
-    else:
-        pivot = pd.DataFrame(columns=["Nama Barang","IN","OUT","RETURN"])
-    if not df_inv.empty:
-        pivot = pivot.merge(df_inv[["Nama Barang","Current Stock"]], on="Nama Barang", how="left")
-    else:
-        pivot["Current Stock"] = 0
-    pivot = pivot[["Nama Barang","IN","OUT","RETURN","Current Stock"]].sort_values("Current Stock", ascending=False)
-    st.dataframe(pivot, use_container_width=True, hide_index=True)
+
+    # -------- Row 3: Reorder insight (OUT 3 bulan terakhir) --------
+    st.subheader("Reorder Insight (berdasarkan OUT 3 bulan terakhir)")
+    st.caption("Menghitung *Days of Cover* ≈ stok saat ini / rata-rata pemakaian harian (dari OUT 3 bulan terakhir).")
+    tgt_days = st.slider("Target Days of Cover", min_value=30, max_value=120, step=15, value=60)
+
+    if df_inv.empty:
+        st.info("Inventory kosong.")
+        return
+
+    ref_end = pd.Timestamp(end_date)
+    last3_start = (ref_end - pd.DateOffset(months=3)).normalize() + pd.Timedelta(days=1)
+    out3 = df_hist[(df_hist["type_norm"]=="OUT") & (df_hist["date_eff"] >= last3_start) & (df_hist["date_eff"] <= ref_end)]
+    out3_item = out3.groupby("item")["qty"].sum().to_dict()
+
+    rows = []
+    for _, r in df_inv.iterrows():
+        name = r["Nama Barang"]; stock = int(r["Current Stock"]); unit = r.get("Unit","-")
+        last3 = int(out3_item.get(name, 0))
+        avg_m = last3 / 3.0
+        avg_daily = (avg_m / 30.0) if avg_m > 0 else 0.0
+        if avg_daily > 0:
+            doc = stock / avg_daily  # days of cover
+        else:
+            doc = float("inf")
+
+        # rekomendasi
+        if doc == float("inf"):
+            reco, urgency = "OK (tidak ada pemakaian)", 5
+        elif doc < 15:
+            reco, urgency = "Order NOW (Urgent)", 1
+        elif doc < 30:
+            reco, urgency = "Order bulan ini", 2
+        elif doc < 60:
+            reco, urgency = "Order bulan depan", 3
+        elif doc < 90:
+            reco, urgency = "Order 2 bulan lagi", 4
+        else:
+            reco, urgency = "OK (stok aman)", 5
+
+        target_qty = int(max(0, (avg_daily * tgt_days) - stock)) if avg_daily > 0 else 0
+
+        rows.append({
+            "Nama Barang": name,
+            "Unit": unit,
+            "Current Stock": stock,
+            "OUT 3 Bulan": last3,
+            "Avg OUT / Bulan": round(avg_m, 1),
+            "Days of Cover": ("∞" if doc==float("inf") else int(round(doc))),
+            "Rekomendasi": reco,
+            "Saran Order (Qty)": target_qty,
+            "_urgency": urgency
+        })
+
+    df_reorder = pd.DataFrame(rows).sort_values(["_urgency","Days of Cover"], ascending=[True, True]).drop(columns=["_urgency"])
+    st.dataframe(df_reorder, use_container_width=True, hide_index=True)
 
     if allow_download:
         xls = BytesIO()
         with pd.ExcelWriter(xls, engine="xlsxwriter") as wr:
-            pivot.to_excel(wr, sheet_name="Rekap per Item", index=False)
-            if not df_range.empty:
-                df_range_out = df_range[["date_eff","type_norm","item","qty","unit","event","trans_type"]].copy()
-                df_range_out.rename(columns={"date_eff":"Tanggal","type_norm":"Tipe","item":"Nama Barang","qty":"Qty","unit":"Satuan","event":"Event","trans_type":"Trans. Tipe"}, inplace=True)
-                df_range_out.to_excel(wr, sheet_name="Detail Transaksi", index=False)
+            df_reorder.to_excel(wr, sheet_name="Reorder Insight", index=False)
         xls.seek(0)
         st.download_button(
-            "Unduh Excel Dashboard",
+            "Unduh Excel Reorder Insight",
             data=xls.read(),
-            file_name=f"Dashboard_{brand_label.replace(' ','_')}.xlsx",
+            file_name=f"Reorder_{brand_label.replace(' ','_')}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
+
 
 # ====== Session State ======
 if "logged_in" not in st.session_state:
@@ -1605,3 +1618,4 @@ else:
                 st.dataframe(df_rows, use_container_width=True, hide_index=True)
             else:
                 st.info("Anda belum memiliki riwayat transaksi.")
+
