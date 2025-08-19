@@ -1,3 +1,4 @@
+# app.py
 import streamlit as st
 import json
 import os
@@ -25,10 +26,10 @@ ICON_URL = "https://i.ibb.co/7C96T9y/favicon.png"
 TRANS_TYPES = ["Support", "Penjualan"]  # tipe transaksi OUT
 
 # ==== Storage backend (Google Sheets opsional) ====
-USE_SHEETS = True  # set True untuk pakai Sheets; jika belum siap, tetap aman karena fallback ke JSON lokal
+USE_SHEETS = False  # True jika ingin pakai Sheets; jika belum siap, set False
 SHEET_IDS = {
-    "gulavit": "SPREADSHEET_ID_GULAVIT",  # ganti dengan ID asli
-    "takokak": "SPREADSHEET_ID_TAKOKAK",  # ganti dengan ID asli
+    "gulavit": "SPREADSHEET_ID_GULAVIT",  # ganti jika USE_SHEETS=True
+    "takokak": "SPREADSHEET_ID_TAKOKAK",
 }
 
 # Pastikan folder uploads ada
@@ -39,19 +40,24 @@ if not os.path.exists(UPLOADS_DIR):
 st.set_page_config(page_title="Inventory System", page_icon=ICON_URL, layout="wide")
 st.markdown("""
     <style>
-    .main { background-color: #F5F5F5; }
-    h1, h2, h3 { color: #FF781F; }
-    .stButton>button {
-        background-color: #34A853; color: white; border-radius: 8px; height: 3em; width: 100%; border: none;
+    .main { background-color: #F8FAFC; }
+    h1, h2, h3 { color: #0F172A; }
+    .kpi-card {
+        background: #ffffff; border: 1px solid #E2E8F0; border-radius: 14px; padding: 18px 18px 12px 18px;
+        box-shadow: 0 1px 2px rgba(0,0,0,0.04);
     }
-    .stButton>button:hover { background-color: #4CAF50; color: white; }
-    .sidebar .sidebar-content { background-color: #FFFFFF; }
-    .stRadio [role=radio] { margin: 10px 0px; transition: all 0.2s ease-in-out; }
-    .stRadio [role=radio] > div { color: #555555; font-weight: 500; font-size: 16px; }
-    .stRadio [role=radio]:hover { background-color: #E0F2F7; border-radius: 8px; }
-    .stRadio [aria-selected="true"] { background-color: #E0F2F7; border-radius: 8px; color: #FF781F !important; font-weight: 700; }
-    .stRadio label > div:first-child { display: none; }
-    .stAlert { background-color: #FFCC80 !important; color: #333333 !important; border-radius: 8px; border: none; }
+    .kpi-title { font-size: 12px; color: #64748B; letter-spacing: .06em; text-transform: uppercase; }
+    .kpi-value { font-size: 26px; font-weight: 700; color: #16A34A; margin-top: 6px; }
+    .kpi-sub { font-size: 12px; color: #64748B; margin-top: 2px; }
+    .stButton>button {
+        background-color: #0EA5E9; color: white; border-radius: 8px; height: 2.6em; width: 100%; border: none;
+    }
+    .stButton>button:hover { background-color: #0284C7; color: white; }
+    .smallcap{ font-size:12px; color:#64748B;}
+    .card {
+        background: #ffffff; border: 1px solid #E2E8F0; border-radius: 14px; padding: 14px;
+        box-shadow: 0 1px 2px rgba(0,0,0,0.04); height: 100%;
+    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -60,9 +66,6 @@ ID_MONTHS = ["Januari","Februari","Maret","April","Mei","Juni","Juli","Agustus",
 
 def timestamp():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-def month_label(dt: pd.Timestamp) -> str:
-    return f"{ID_MONTHS[dt.month-1]} {dt.year}"
 
 def dataframe_to_excel_bytes(df: pd.DataFrame, sheet_name="Sheet1") -> bytes:
     output = BytesIO()
@@ -97,11 +100,7 @@ def make_out_template_bytes(data) -> bytes:
             "Tipe": "Support"
         })
     df_tmpl = pd.DataFrame(rows, columns=cols)
-    output = BytesIO()
-    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-        df_tmpl.to_excel(writer, sheet_name="Template OUT", index=False)
-    output.seek(0)
-    return output.read()
+    return dataframe_to_excel_bytes(df_tmpl, "Template OUT")
 
 def make_return_template_bytes(data) -> bytes:
     """Template Excel Retur: Tanggal | Kode Barang | Nama Barang | Qty | Event"""
@@ -112,42 +111,21 @@ def make_return_template_bytes(data) -> bytes:
     if inv_items:
         for (code, item) in inv_items[:2]:
             rows.append({
-                "Tanggal": today,
-                "Kode Barang": code,
-                "Nama Barang": item.get("name", ""),
-                "Qty": 1,
-                "Event": "Contoh event dari OUT"
+                "Tanggal": today, "Kode Barang": code, "Nama Barang": item.get("name", ""),
+                "Qty": 1, "Event": "Contoh event dari OUT"
             })
     else:
-        rows.append({
-            "Tanggal": today,
-            "Kode Barang": "ITM-0001",
-            "Nama Barang": "Contoh Produk",
-            "Qty": 1,
-            "Event": "Contoh event dari OUT"
-        })
+        rows.append({"Tanggal": today, "Kode Barang": "ITM-0001", "Nama Barang": "Contoh Produk", "Qty": 1, "Event": "Contoh event dari OUT"})
     df_tmpl = pd.DataFrame(rows, columns=cols)
-    output = BytesIO()
-    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-        df_tmpl.to_excel(writer, sheet_name="Template Retur", index=False)
-    output.seek(0)
-    return output.read()
+    return dataframe_to_excel_bytes(df_tmpl, "Template Retur")
 
 def make_master_template_bytes() -> bytes:
     """Template Excel Master: Kode Barang | Nama Barang | Qty | Satuan | Kategori"""
     cols = ["Kode Barang", "Nama Barang", "Qty", "Satuan", "Kategori"]
     df_tmpl = pd.DataFrame([{
-        "Kode Barang": "ITM-0001",
-        "Nama Barang": "Contoh Produk",
-        "Qty": 10,
-        "Satuan": "pcs",
-        "Kategori": "Umum"
+        "Kode Barang": "ITM-0001", "Nama Barang": "Contoh Produk", "Qty": 10, "Satuan": "pcs", "Kategori": "Umum"
     }], columns=cols)
-    output = BytesIO()
-    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-        df_tmpl.to_excel(writer, sheet_name="Template Master", index=False)
-    output.seek(0)
-    return output.read()
+    return dataframe_to_excel_bytes(df_tmpl, "Template Master")
 
 # ===== Normalisasi record agar kolom seragam =====
 STD_REQ_COLS = ["date","code","item","qty","unit","event","trans_type","do_number","attachment","user","timestamp"]
@@ -188,7 +166,7 @@ def normalize_out_record(base: dict) -> dict:
     return rec
 
 def normalize_return_record(base: dict) -> dict:
-    """Samakan kolom RETURN (manual/Excel), kolom dibuat seragam."""
+    """Samakan kolom RETURN (manual/Excel)."""
     rec = {k: None for k in STD_REQ_COLS}
     rec.update({
         "date": _to_date_str(base.get("date")),
@@ -241,8 +219,7 @@ def _gs_open(brand_key):
 
     ws_users   = ensure_ws("users",   ["username","password","role"])
     ws_inv     = ensure_ws("inventory", ["code","name","qty","unit","category"])
-    ws_pending = ensure_ws("pending_requests",
-                           ["type"] + STD_REQ_COLS)
+    ws_pending = ensure_ws("pending_requests", ["type"] + STD_REQ_COLS)
     ws_history = ensure_ws("history",
                            ["action","item","qty","stock","unit","user","event",
                             "do_number","attachment","timestamp","date","code","trans_type"])
@@ -265,7 +242,6 @@ def _write_df(ws, df: pd.DataFrame, headers):
 
 def load_data_sheets(brand_key):
     _, ws_users, ws_inv, ws_pending, ws_history = _gs_open(brand_key)
-
     df_users   = _df_from_ws(ws_users)
     df_inv     = _df_from_ws(ws_inv)
     df_pending = _df_from_ws(ws_pending)
@@ -306,7 +282,6 @@ def load_data_sheets(brand_key):
 
 def save_data_sheets(data, brand_key):
     _, ws_users, ws_inv, ws_pending, ws_history = _gs_open(brand_key)
-
     users_rows = []
     for uname, info in data.get("users", {}).items():
         users_rows.append({"username": uname, "password": info.get("password",""), "role": info.get("role","user")})
@@ -315,14 +290,10 @@ def save_data_sheets(data, brand_key):
     inv_rows = []
     for code, it in data.get("inventory", {}).items():
         inv_rows.append({
-            "code": code,
-            "name": it.get("name",""),
-            "qty": int(it.get("qty",0)),
-            "unit": it.get("unit","-"),
-            "category": it.get("category","Uncategorized"),
+            "code": code, "name": it.get("name",""), "qty": int(it.get("qty",0)),
+            "unit": it.get("unit","-"), "category": it.get("category","Uncategorized"),
         })
     _write_df(ws_inv, pd.DataFrame(inv_rows), ["code","name","qty","unit","category"])
-
     _write_df(ws_pending, pd.DataFrame(data.get("pending_requests", [])), ["type"] + STD_REQ_COLS)
     _write_df(ws_history, pd.DataFrame(data.get("history", [])),
               ["action","item","qty","stock","unit","user","event","do_number","attachment","timestamp","date","code","trans_type"])
@@ -368,147 +339,282 @@ def save_data(data, brand_key):
     with open(data_file, "w") as f:
         json.dump(data, f, indent=4)
 
-# >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-# DASHBOARD: pakai 'date' bila ada; jika tidak, pakai tanggal dari 'timestamp' (tanpa jam)
-def build_dashboard_3months_tables(data) -> tuple:
-    inv_records = [
-        {"Kode": code, "Nama Barang": item.get("name", "-"), "Current Stock": int(item.get("qty", 0))}
-        for code, item in data.get("inventory", {}).items()
-    ]
-    df_inv = pd.DataFrame(inv_records) if inv_records else pd.DataFrame(
-        columns=["Kode","Nama Barang","Current Stock"]
-    )
-
+# ===================== DATA PREP UNTUK DASHBOARD =====================
+def _prepare_history_df(data: dict) -> pd.DataFrame:
+    """History rapi: hanya APPROVE_* dengan tanggal efektif & tipe."""
     hist = data.get("history", [])
-    df_hist = pd.DataFrame(hist) if hist else pd.DataFrame(
-        columns=["action","item","qty","timestamp","date"]
-    )
+    df = pd.DataFrame(hist)
+    if df.empty:
+        return df
 
-    if df_inv.empty and df_hist.empty:
-        now = pd.Timestamp.now()
-        this_month_start = pd.Timestamp(year=now.year, month=now.month, day=1)
-        month_starts = [this_month_start,
-                        this_month_start - pd.DateOffset(months=1),
-                        this_month_start - pd.DateOffset(months=2)]
-        month_labels = [month_label(ms) for ms in month_starts]
-        empty_cols = []
-        for lbl in month_labels:
-            empty_cols += [f"{lbl} IN", f"{lbl} OUT", f"{lbl} Retur"]
-        df_dash = pd.DataFrame(columns=["Nama Barang"] + empty_cols + ["Current Stock"])
-        return df_inv, df_dash, month_labels
+    df["qty"] = pd.to_numeric(df.get("qty", 0), errors="coerce").fillna(0).astype(int)
+    s_date = pd.to_datetime(df["date"], errors="coerce") if "date" in df.columns else pd.Series(pd.NaT, index=df.index)
+    s_ts = pd.to_datetime(df["timestamp"], errors="coerce") if "timestamp" in df.columns else pd.Series(pd.NaT, index=df.index)
+    df["date_eff"] = s_date.fillna(s_ts).dt.floor("D")
 
-    # Item unik
-    all_items = set(df_inv["Nama Barang"].tolist()) if not df_inv.empty else set()
+    act = df.get("action", "").astype(str).str.upper()
+    df["type_norm"] = "-"
+    df.loc[act.str.contains("APPROVE_IN"), "type_norm"] = "IN"
+    df.loc[act.str.contains("APPROVE_OUT"), "type_norm"] = "OUT"
+    df.loc[act.str.contains("APPROVE_RETURN"), "type_norm"] = "RETURN"
+
+    for col in ["item", "event", "trans_type", "unit"]:
+        if col not in df.columns:
+            df[col] = None
+    df["event"] = df["event"].fillna("-").astype(str)
+    df["trans_type"] = df["trans_type"].fillna("-").astype(str)
+
+    df = df[df["type_norm"].isin(["IN","OUT","RETURN"])].copy()
+    df = df.dropna(subset=["date_eff"])
+    return df
+
+def _calc_kpi(df_hist: pd.DataFrame, df_inv: pd.DataFrame, start_date, end_date):
+    """KPI berbasis qty (bukan rupiah). Sales = OUT Penjualan."""
+    total_units = int(df_inv["Current Stock"].sum()) if not df_inv.empty else 0
+    total_skus  = int(len(df_inv)) if not df_inv.empty else 0
+
+    mask = (df_hist["date_eff"] >= pd.Timestamp(start_date)) & (df_hist["date_eff"] <= pd.Timestamp(end_date)) if not df_hist.empty else pd.Series([], dtype=bool)
+    df_cur = df_hist.loc[mask] if not df_hist.empty else pd.DataFrame(columns=df_hist.columns)
+    df_prev = pd.DataFrame(columns=df_hist.columns)
     if not df_hist.empty:
-        all_items |= set(df_hist.get("item", pd.Series([], dtype=str)).dropna().astype(str).tolist())
-    all_items = sorted(list(all_items))
+        period_days = (pd.Timestamp(end_date) - pd.Timestamp(start_date)).days + 1
+        prev_end = pd.Timestamp(start_date) - pd.Timedelta(days=1)
+        prev_start = prev_end - pd.Timedelta(days=period_days-1)
+        prev_mask = (df_hist["date_eff"] >= prev_start) & (df_hist["date_eff"] <= prev_end)
+        df_prev = df_hist.loc[prev_mask]
 
-    # Tanggal efektif (robust)
-    if not df_hist.empty:
-        df_hist["qty"] = pd.to_numeric(df_hist.get("qty", 0), errors="coerce").fillna(0).astype(int)
+    # Sales qty = OUT Penjualan
+    cur_sales_qty  = int(df_cur[(df_cur["type_norm"]=="OUT") & (df_cur["trans_type"]=="Penjualan")]["qty"].sum()) if not df_cur.empty else 0
+    prev_sales_qty = int(df_prev[(df_prev["type_norm"]=="OUT") & (df_prev["trans_type"]=="Penjualan")]["qty"].sum()) if not df_prev.empty else 0
 
-        s_date = pd.to_datetime(df_hist["date"], errors="coerce") if "date" in df_hist.columns else pd.Series(pd.NaT, index=df_hist.index)
-        s_ts = pd.to_datetime(df_hist["timestamp"], errors="coerce").dt.floor("D") if "timestamp" in df_hist.columns else pd.Series(pd.NaT, index=df_hist.index)
+    # Turnover ratio ~ sales / avg inventory (disederhanakan → sales / persediaan sekarang)
+    turnover = (cur_sales_qty / total_units) if total_units > 0 else 0.0
 
-        df_hist["eff_date"] = s_date.fillna(s_ts)
-        df_hist["ACTION_UP"] = df_hist["action"].astype(str).str.upper()
-    else:
-        df_hist = pd.DataFrame(columns=["item","qty","eff_date","ACTION_UP"])
+    # Inventory to Sales ratio
+    inv_to_sales = (total_units / cur_sales_qty) if cur_sales_qty > 0 else 0.0
 
-    # 3 bulan terakhir
-    now = pd.Timestamp.now()
-    this_month_start = pd.Timestamp(year=now.year, month=now.month, day=1)
-    month_starts = [this_month_start,
-                    this_month_start - pd.DateOffset(months=1),
-                    this_month_start - pd.DateOffset(months=2)]
-    month_labels = [month_label(ms) for ms in month_starts]
+    # Avg Days of Supply ≈ persediaan sekarang / rata-rata penjualan per hari (di periode)
+    days = 0.0
+    if cur_sales_qty > 0:
+        days = total_units / (cur_sales_qty / max(1, (pd.Timestamp(end_date) - pd.Timestamp(start_date)).days + 1))
+    return {
+        "total_units": total_units,
+        "total_skus": total_skus,
+        "cur_sales": cur_sales_qty,
+        "prev_sales": prev_sales_qty,
+        "turnover": turnover,
+        "inv_to_sales": inv_to_sales,
+        "days_supply": days
+    }
 
-    # Rekap per barang
-    df_dash = pd.DataFrame({"Nama Barang": all_items})
-    for ms in month_starts:
-        next_ms = ms + pd.offsets.MonthBegin(1)
-        lbl = month_label(ms)
-        m = df_hist[(df_hist["eff_date"] >= ms) & (df_hist["eff_date"] < next_ms)].copy()
-        if not m.empty:
-            m["IN_QTY"]  = m.apply(lambda r: r["qty"] if "APPROVE_IN" in r["ACTION_UP"] else 0, axis=1)
-            m["OUT_QTY"] = m.apply(lambda r: r["qty"] if "APPROVE_OUT" in r["ACTION_UP"] else 0, axis=1)
-            m["RET_QTY"] = m.apply(lambda r: r["qty"] if "APPROVE_RETURN" in r["ACTION_UP"] or "RETURN" in r["ACTION_UP"] else 0, axis=1)
-            g = (m.groupby("item", dropna=False)[["IN_QTY","OUT_QTY","RET_QTY"]]
-                   .sum().reset_index().rename(columns={"item":"Nama Barang"}))
-        else:
-            g = pd.DataFrame(columns=["Nama Barang","IN_QTY","OUT_QTY","RET_QTY"])
+# ===================== DASHBOARD PRO (mirip referensi) =====================
+def _kpi_card(title, value, change_text=None):
+    st.markdown(f"""
+        <div class="kpi-card">
+            <div class="kpi-title">{title}</div>
+            <div class="kpi-value">{value}</div>
+            <div class="kpi-sub">{change_text or ""}</div>
+        </div>
+    """, unsafe_allow_html=True)
 
-        df_dash = df_dash.merge(g, on="Nama Barang", how="left")
-        df_dash.rename(columns={
-            "IN_QTY":  f"{lbl} IN",
-            "OUT_QTY": f"{lbl} OUT",
-            "RET_QTY": f"{lbl} Retur"
-        }, inplace=True)
-
-    if not df_inv.empty:
-        df_dash = df_dash.merge(df_inv[["Nama Barang","Current Stock"]], on="Nama Barang", how="left")
-    else:
-        df_dash["Current Stock"] = 0
-
-    for c in df_dash.columns:
-        if c != "Nama Barang":
-            df_dash[c] = pd.to_numeric(df_dash[c], errors="coerce").fillna(0).astype(int)
-
-    return df_inv, df_dash, month_labels
-# <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
-
-def dashboard_charts(df_dash: pd.DataFrame, month_labels: list, df_inv: pd.DataFrame):
-    totals = []
-    for lbl in month_labels:
-        totals.append({
-            "Bulan": lbl,
-            "IN":  int(df_dash.get(f"{lbl} IN", pd.Series()).sum()) if f"{lbl} IN" in df_dash.columns else 0,
-            "OUT": int(df_dash.get(f"{lbl} OUT", pd.Series()).sum()) if f"{lbl} OUT" in df_dash.columns else 0,
-            "Retur": int(df_dash.get(f"{lbl} Retur", pd.Series()).sum()) if f"{lbl} Retur" in df_dash.columns else 0,
+def _gauge(value, max_value, title):
+    """Simple semi-donut gauge (Altair)."""
+    try:
+        if not _ALT_OK:
+            st.metric(title, f"{value:.2f}")
+            return
+        v = float(value); vmax = max(float(max_value), 1.0)
+        percent = max(0.0, min(1.0, v / vmax))
+        df = pd.DataFrame({
+            "label": ["filled", "rest"],
+            "value": [percent, 1 - percent]
         })
-    df_tot = pd.DataFrame(totals)
-    c1, c2 = st.columns(2)
+        chart = alt.Chart(df).mark_arc(innerRadius=50, cornerRadius=4).encode(
+            theta=alt.Theta("value:Q", stack=True),
+            color=alt.Color("label:N", scale=alt.Scale(range=["#8B5CF6","#E5E7EB"]), legend=None)
+        ).properties(height=160)
+        st.markdown(f'<div class="smallcap">{title}</div>', unsafe_allow_html=True)
+        st.altair_chart(chart, use_container_width=True)
+        st.markdown(f'<div class="kpi-sub">Nilai: <b>{v:.2f}</b> (max {vmax:.0f})</div>', unsafe_allow_html=True)
+    except Exception:
+        st.metric(title, f"{value:.2f}")
 
-    with c1:
-        st.subheader("Total IN/OUT/Retur (3 Bulan)")
-        if _ALT_OK and not df_tot.empty:
-            df_long = df_tot.melt("Bulan", var_name="Tipe", value_name="Jumlah")
-            chart = (
-                alt.Chart(df_long)
-                .mark_bar()
-                .encode(
-                    x=alt.X("Bulan:N", title="Bulan"),
-                    y=alt.Y("Jumlah:Q", title="Jumlah"),
-                    color=alt.Color("Tipe:N"),
-                    xOffset="Tipe:N",
-                    tooltip=["Bulan","Tipe","Jumlah"]
-                )
-                .properties(height=300)
-            )
+def render_dashboard_pro(data: dict, brand_label: str, allow_download=True):
+    df_hist = _prepare_history_df(data)
+    inv_records = [
+        {"Kode": code, "Nama Barang": it.get("name","-"), "Current Stock": int(it.get("qty",0))}
+        for code, it in data.get("inventory", {}).items()
+    ]
+    df_inv = pd.DataFrame(inv_records)
+
+    st.markdown(f"## Dashboard — {brand_label}")
+    st.caption("Semua metrik berbasis jumlah (qty). *Sales* = OUT dengan tipe **Penjualan**.")
+    st.divider()
+
+    # -------- Filter --------
+    today = pd.Timestamp.today().normalize()
+    default_start = today - pd.Timedelta(days=179)
+    f1, f2, f3 = st.columns([1,1,1])
+    start_date = f1.date_input("Tanggal mulai", value=default_start.date())
+    end_date   = f2.date_input("Tanggal akhir", value=today.date())
+    group_by   = f3.radio("Agregasi", ["Bulanan","Mingguan","Harian"], horizontal=True, index=0)
+
+    # -------- KPI --------
+    k = _calc_kpi(df_hist, df_inv, start_date, end_date)
+    kcol = st.columns(5)
+    with kcol[0]: _kpi_card("Inventory Units", f"{k['total_units']:,}", f"Change (vs prev): {k['cur_sales']-k['prev_sales']:+,} penjualan")
+    with kcol[1]: _kpi_card("Stock Available (SKU)", f"{k['total_skus']:,}", f"Sales (periode ini): {k['cur_sales']:,}")
+    with kcol[2]: _gauge(k["turnover"], 2.0, "Turnover Ratio (≈ sales/inventory)")
+    with kcol[3]: _gauge(k["inv_to_sales"], 5.0, "Inventory → Sales Ratio")
+    with kcol[4]: _gauge(k["days_supply"], 120.0, "Avg Days of Supply")
+
+    st.divider()
+
+    # -------- Data periode --------
+    if not df_hist.empty:
+        mask = (df_hist["date_eff"] >= pd.Timestamp(start_date)) & (df_hist["date_eff"] <= pd.Timestamp(end_date))
+        df_range = df_hist.loc[mask].copy()
+    else:
+        df_range = pd.DataFrame(columns=["date_eff","type_norm","qty","item","event","trans_type"])
+
+    # periode kolom
+    if not df_range.empty:
+        if group_by == "Bulanan":
+            df_range["periode"] = df_range["date_eff"].dt.to_period("M").dt.to_timestamp()
+            fmts = "%b %Y"
+        elif group_by == "Mingguan":
+            df_range["periode"] = df_range["date_eff"] - pd.to_timedelta(df_range["date_eff"].dt.weekday, unit="D")
+            fmts = "Minggu %d %b %Y"
+        else:
+            df_range["periode"] = df_range["date_eff"]
+            fmts = "%d %b %Y"
+
+    # -------- Grafik Row 1 --------
+    g1, g2, g3 = st.columns([1.15, 1, 1])
+    with g1:
+        st.markdown('<div class="card"><div class="smallcap">Inventory Value (Qty) Over Time</div>', unsafe_allow_html=True)
+        if not df_range.empty and _ALT_OK:
+            g = (df_range.groupby(["periode"], dropna=False)["qty"].sum().reset_index())
+            g["Periode"] = g["periode"].dt.strftime(fmts)
+            chart = alt.Chart(g).mark_bar().encode(
+                x=alt.X("Periode:N", title="Periode"),
+                y=alt.Y("qty:Q", title="Total Qty (IN+OUT+RETURN)"),
+                tooltip=["Periode","qty"]
+            ).properties(height=250)
             st.altair_chart(chart, use_container_width=True)
         else:
-            st.bar_chart(df_tot.set_index("Bulan"))
+            st.info("Belum ada data.")
+        st.markdown("</div>", unsafe_allow_html=True)
 
-    with c2:
-        st.subheader("Top 5 Current Stock")
-        if df_inv.empty:
-            st.info("Inventory kosong.")
-        else:
-            df_top5 = df_inv.sort_values("Current Stock", ascending=False).head(5).copy()
-            if _ALT_OK:
-                chart2 = (
-                    alt.Chart(df_top5)
-                    .mark_bar()
-                    .encode(
-                        y=alt.Y("Nama Barang:N", sort="-x", title="Item"),
-                        x=alt.X("Current Stock:Q", title="Qty"),
-                        tooltip=["Nama Barang","Current Stock"]
-                    )
-                    .properties(height=300)
-                )
-                st.altair_chart(chart2, use_container_width=True)
+    with g2:
+        st.markdown('<div class="card"><div class="smallcap">Turnover (Days) by Month</div>', unsafe_allow_html=True)
+        if not df_range.empty and _ALT_OK:
+            # days ≈ inventory / sales_per_day (per periode). inventory = total_units (sederhana).
+            sales = (df_range[(df_range["type_norm"]=="OUT") & (df_range["trans_type"]=="Penjualan")]
+                     .groupby("periode")["qty"].sum().reset_index())
+            if not sales.empty:
+                sales["days"] = sales["qty"].apply(lambda x: (k["total_units"] / (x/30)) if x>0 else None)
+                sales["Periode"] = sales["periode"].dt.strftime(fmts)
+                line = alt.Chart(sales).mark_line(point=True).encode(
+                    x="Periode:N", y=alt.Y("days:Q", title="Days"), tooltip=["Periode","days"]
+                ).properties(height=250)
+                st.altair_chart(line, use_container_width=True)
             else:
-                st.bar_chart(df_top5.set_index("Nama Barang")["Current Stock"])
+                st.info("Belum ada OUT (Penjualan) di rentang ini.")
+        else:
+            st.info("Belum ada data.")
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    with g3:
+        st.markdown('<div class="card"><div class="smallcap">Top 10 Items Based on Current Stock</div>', unsafe_allow_html=True)
+        if not df_inv.empty and _ALT_OK:
+            top10 = df_inv.sort_values("Current Stock", ascending=False).head(10)
+            chart = alt.Chart(top10).mark_bar().encode(
+                y=alt.Y("Nama Barang:N", sort="-x", title=None),
+                x=alt.X("Current Stock:Q", title="Qty"),
+                tooltip=["Nama Barang","Current Stock"]
+            ).properties(height=250)
+            st.altair_chart(chart, use_container_width=True)
+        else:
+            st.info("Inventory kosong.")
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    # -------- Grafik Row 2 --------
+    h1, h2 = st.columns([1.1,1])
+    with h1:
+        st.markdown('<div class="card"><div class="smallcap">Inventory Movement (IN / OUT / RETURN)</div>', unsafe_allow_html=True)
+        if not df_range.empty:
+            grp = (df_range.groupby(["periode","type_norm"])["qty"].sum().reset_index())
+            grp["Periode"] = grp["periode"].dt.strftime(fmts)
+            if _ALT_OK:
+                bar = alt.Chart(grp).mark_bar().encode(
+                    x=alt.X("Periode:N", title="Periode"),
+                    y=alt.Y("qty:Q", title="Qty"),
+                    color=alt.Color("type_norm:N", title="Tipe", scale=alt.Scale(domain=["IN","OUT","RETURN"], range=["#22C55E","#EF4444","#0EA5E9"])),
+                    tooltip=["Periode","type_norm","qty"]
+                ).properties(height=280)
+                st.altair_chart(bar, use_container_width=True)
+            else:
+                st.bar_chart(grp.pivot(index="Periode", columns="type_norm", values="qty").fillna(0))
+        else:
+            st.info("Belum ada data.")
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    with h2:
+        st.markdown('<div class="card"><div class="smallcap">Inventory to Sales Analysis</div>', unsafe_allow_html=True)
+        if not df_range.empty:
+            # Inventory (gunakan stok sekarang sebagai baseline) vs Sales (OUT Penjualan) per periode
+            inv_df = (df_range.groupby("periode")["qty"].sum().reset_index())
+            inv_df["Inventory"] = k["total_units"]  # baseline sederhana
+            sales_df = (df_range[(df_range["type_norm"]=="OUT") & (df_range["trans_type"]=="Penjualan")]
+                        .groupby("periode")["qty"].sum().reset_index().rename(columns={"qty":"Sales"}))
+            merged = inv_df[["periode","Inventory"]].merge(sales_df, on="periode", how="left").fillna(0)
+            merged["Ratio"] = merged.apply(lambda r: (r["Inventory"]/r["Sales"]) if r["Sales"]>0 else None, axis=1)
+            merged["Periode"] = merged["periode"].dt.strftime(fmts)
+            if _ALT_OK:
+                base = alt.Chart(merged).properties(height=280)
+                bars = base.mark_bar().encode(x="Periode:N", y=alt.Y("Inventory:Q", title="Qty"), tooltip=["Periode","Inventory"])
+                line = base.mark_line(point=True, color="#1D4ED8").encode(x="Periode:N", y=alt.Y("Sales:Q"), tooltip=["Periode","Sales"])
+                ratio = base.mark_line(point=True, color="#F59E0B").encode(x="Periode:N", y=alt.Y("Ratio:Q"), tooltip=["Periode","Ratio"])
+                st.altair_chart(bars + line + ratio, use_container_width=True)
+            else:
+                st.dataframe(merged[["Periode","Inventory","Sales","Ratio"]], use_container_width=True, hide_index=True)
+        else:
+            st.info("Belum ada data.")
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    st.divider()
+    # -------- Ringkasan per item + download --------
+    st.subheader("Ringkasan per Item (periode terpilih)")
+    if not df_range.empty:
+        pivot = (df_range.pivot_table(index="item", columns="type_norm", values="qty", aggfunc="sum", fill_value=0)
+                 .reset_index().rename(columns={"item":"Nama Barang"}))
+        for col in ["IN","OUT","RETURN"]:
+            if col not in pivot.columns: pivot[col] = 0
+    else:
+        pivot = pd.DataFrame(columns=["Nama Barang","IN","OUT","RETURN"])
+    if not df_inv.empty:
+        pivot = pivot.merge(df_inv[["Nama Barang","Current Stock"]], on="Nama Barang", how="left")
+    else:
+        pivot["Current Stock"] = 0
+    pivot = pivot[["Nama Barang","IN","OUT","RETURN","Current Stock"]].sort_values("Current Stock", ascending=False)
+    st.dataframe(pivot, use_container_width=True, hide_index=True)
+
+    if allow_download:
+        xls = BytesIO()
+        with pd.ExcelWriter(xls, engine="xlsxwriter") as wr:
+            pivot.to_excel(wr, sheet_name="Rekap per Item", index=False)
+            if not df_range.empty:
+                df_range_out = df_range[["date_eff","type_norm","item","qty","unit","event","trans_type"]].copy()
+                df_range_out.rename(columns={"date_eff":"Tanggal","type_norm":"Tipe","item":"Nama Barang","qty":"Qty","unit":"Satuan","event":"Event","trans_type":"Trans. Tipe"}, inplace=True)
+                df_range_out.to_excel(wr, sheet_name="Detail Transaksi", index=False)
+        xls.seek(0)
+        st.download_button(
+            "Unduh Excel Dashboard",
+            data=xls.read(),
+            file_name=f"Dashboard_{brand_label.replace(' ','_')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
 
 # ====== Session State ======
 if "logged_in" not in st.session_state:
@@ -531,7 +637,7 @@ if not st.session_state.logged_in:
     st.markdown(
         f"""
         <div style="text-align:center;">
-            <h1 style='margin-top:10px; color: #FF781F;'>Inventory Management System</h1>
+            <h1 style='margin-top:10px;'>Inventory Management System</h1>
         </div>
         """,
         unsafe_allow_html=True
@@ -594,38 +700,7 @@ else:
 
         # ===== Dashboard (Admin) =====
         if menu == "Dashboard":
-            st.markdown(f"## Dashboard - Brand {st.session_state.current_brand.capitalize()}")
-            st.caption("Menampilkan total **IN / OUT / Retur** (approved) 3 bulan terakhir + grafik berdasarkan tanggal transaksi.")
-            st.divider()
-
-            df_inv, df_dash, month_labels = build_dashboard_3months_tables(data)
-
-            cols = st.columns(3)
-            for idx, lbl in enumerate(month_labels):
-                in_col = f"{lbl} IN"; out_col = f"{lbl} OUT"; ret_col = f"{lbl} Retur"
-                total_in = int(df_dash[in_col].sum()) if in_col in df_dash else 0
-                total_out = int(df_dash[out_col].sum()) if out_col in df_dash else 0
-                total_ret = int(df_dash[ret_col].sum()) if ret_col in df_dash else 0
-                with cols[idx]:
-                    st.metric(f"{lbl} • IN", f"{total_in}")
-                    st.metric(f"{lbl} • OUT", f"{total_out}")
-                    st.metric(f"{lbl} • Retur", f"{total_ret}")
-
-            st.markdown("### Grafik")
-            dashboard_charts(df_dash, month_labels, df_inv)
-
-            st.markdown("### Rekap Per Barang (3 Bulan Terakhir + Current Stock)")
-            if df_dash.empty:
-                st.info("Belum ada data.")
-            else:
-                ordered_cols = ["Nama Barang"]
-                for lbl in month_labels:
-                    ordered_cols += [f"{lbl} IN", f"{lbl} OUT", f"{lbl} Retur"]
-                ordered_cols += ["Current Stock"]
-                st.dataframe(
-                    df_dash[ordered_cols].sort_values("Current Stock", ascending=False),
-                    use_container_width=True, hide_index=True
-                )
+            render_dashboard_pro(data, brand_label=st.session_state.current_brand.capitalize(), allow_download=False)
 
         elif menu == "Lihat Stok Barang":
             st.markdown(f"## Stok Barang - Brand {st.session_state.current_brand.capitalize()}")
@@ -708,58 +783,41 @@ else:
             st.divider()
             tab1, tab2 = st.tabs(["Input Manual", "Upload Excel"])
 
-            # ----- INPUT MANUAL (wajib event & tipe) -----
-with tab1:
-    col1, col2 = st.columns(2)
-    idx = col1.selectbox(
-        "Pilih Barang", range(len(items)),
-        format_func=lambda x: f"{items[x]['name']} (Stok: {items[x]['qty']} {items[x].get('unit', '-')})"
-    )
+            with tab1:
+                code_input = st.text_input("Kode Barang (unik & wajib)", placeholder="Misal: ITM-0001")
+                name = st.text_input("Nama Barang")
+                unit = st.text_input("Satuan (misal: pcs, box, liter)")
+                qty = st.number_input("Jumlah Stok Awal", min_value=0, step=1)
+                category = st.text_input("Kategori Barang", placeholder="Misal: Minuman, Makanan")
 
-    # stok aman (handle None)
-    max_qty = int(pd.to_numeric(items[idx].get("qty", 0), errors="coerce") or 0)
-
-    # qty input: kunci jika stok 0
-    if max_qty < 1:
-        qty = 0
-        col2.number_input("Jumlah", min_value=0, max_value=0, step=1, value=0, disabled=True)
-        st.warning("Stok item ini 0. Tidak bisa menambah request OUT.")
-    else:
-        qty = col2.number_input("Jumlah", min_value=1, max_value=max_qty, step=1)
-
-    tipe = st.selectbox("Tipe Transaksi (wajib)", TRANS_TYPES, index=0)
-    event_manual = st.text_input("Nama Event (wajib)", placeholder="Misal: Pameran, Acara Kantor")
-
-    if st.button("Tambah Item OUT (Manual)"):
-        if max_qty < 1:
-            st.error("Stok 0 — tidak bisa menambah OUT untuk item ini.")
-        elif not event_manual.strip():
-            st.error("Event wajib diisi.")
-        elif qty < 1:
-            st.error("Jumlah harus minimal 1.")
-        else:
-            selected_name = items[idx]["name"]
-            found_code = next((code for code, it in data["inventory"].items() if it.get("name") == selected_name), None)
-            base = {
-                "date": datetime.now().strftime("%Y-%m-%d"),
-                "code": found_code if found_code else "-",
-                "item": selected_name,
-                "qty": qty,
-                "unit": items[idx].get("unit", "-"),
-                "event": event_manual.strip(),
-                "trans_type": tipe,
-                "user": st.session_state.username,
-            }
-            st.session_state.req_out_items.append(normalize_out_record(base))
-            st.success("Item OUT (manual) ditambahkan ke daftar.")
-
+                if st.button("Tambah Barang Manual"):
+                    if not code_input.strip():
+                        st.error("Kode Barang wajib diisi.")
+                    elif code_input in data["inventory"]:
+                        st.error(f"Kode Barang '{code_input}' sudah ada.")
+                    elif not name.strip():
+                        st.error("Nama barang wajib diisi.")
+                    else:
+                        data["inventory"][code_input] = {"name": name.strip(), "qty": int(qty), "unit": unit.strip() if unit else "-", "category": category.strip() if category else "Uncategorized"}
+                        data["history"].append({
+                            "action": "ADD_ITEM",
+                            "item": name.strip(),
+                            "qty": int(qty),
+                            "stock": int(qty),
+                            "unit": unit.strip() if unit else "-",
+                            "user": st.session_state.username,
+                            "event": "-",
+                            "timestamp": timestamp()
+                        })
+                        save_data(data, st.session_state.current_brand)
+                        st.success(f"Barang '{name}' berhasil ditambahkan dengan kode {code_input}")
+                        st.rerun()
 
             with tab2:
                 st.info("Format Excel: **Kode Barang | Nama Barang | Qty | Satuan | Kategori**")
-                tmpl_master = make_master_template_bytes()
                 st.download_button(
                     label="📥 Unduh Template Master Excel",
-                    data=tmpl_master,
+                    data=make_master_template_bytes(),
                     file_name=f"Template_Master_{st.session_state.current_brand.capitalize()}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
@@ -804,10 +862,8 @@ with tab1:
                                     })
                                     added += 1
                                 save_data(data, st.session_state.current_brand)
-                                if added:
-                                    st.success(f"{added} item master berhasil ditambahkan.")
-                                if errors:
-                                    st.warning("Beberapa baris dilewati:\n- " + "\n- ".join(errors))
+                                if added: st.success(f"{added} item master berhasil ditambahkan.")
+                                if errors: st.warning("Beberapa baris dilewati:\n- " + "\n- ".join(errors))
                                 st.rerun()
 
         elif menu == "Approve Request":
@@ -817,8 +873,7 @@ with tab1:
                 processed_requests = []
                 for req in data["pending_requests"]:
                     temp_req = req.copy()
-                    for k in STD_REQ_COLS:
-                        temp_req.setdefault(k, None)
+                    for k in STD_REQ_COLS: temp_req.setdefault(k, None)
                     temp_req.setdefault('attachment', None)
                     temp_req.setdefault('trans_type', None)
                     processed_requests.append(temp_req)
@@ -826,21 +881,17 @@ with tab1:
                 df_pending = pd.DataFrame(processed_requests)
                 df_pending["Lampiran"] = df_pending["attachment"].apply(lambda x: "Ada" if x else "Tidak Ada")
 
-                # SELECT ALL
                 if "approve_select_flags" not in st.session_state or len(st.session_state.approve_select_flags) != len(df_pending):
                     st.session_state.approve_select_flags = [False] * len(df_pending)
 
                 csel1, csel2 = st.columns([1,1])
-                if csel1.button("Pilih semua"):
-                    st.session_state.approve_select_flags = [True]*len(df_pending)
-                if csel2.button("Kosongkan pilihan"):
-                    st.session_state.approve_select_flags = [False]*len(df_pending)
+                if csel1.button("Pilih semua"): st.session_state.approve_select_flags = [True]*len(df_pending)
+                if csel2.button("Kosongkan pilihan"): st.session_state.approve_select_flags = [False]*len(df_pending)
 
                 df_pending["Pilih"] = st.session_state.approve_select_flags
                 col_cfg = {"Pilih": st.column_config.CheckboxColumn("Pilih", default=False)}
                 for c in df_pending.columns:
-                    if c != "Pilih":
-                        col_cfg[c] = st.column_config.TextColumn(c, disabled=True)
+                    if c != "Pilih": col_cfg[c] = st.column_config.TextColumn(c, disabled=True)
                 edited_df = st.data_editor(df_pending, key="editor_admin_approve", use_container_width=True, hide_index=True, column_config=col_cfg)
                 st.session_state.approve_select_flags = edited_df["Pilih"].fillna(False).tolist()
                 selected_indices = [i for i, v in enumerate(st.session_state.approve_select_flags) if v]
@@ -856,13 +907,9 @@ with tab1:
                                 approved_req = data["pending_requests"].pop(match_idx)
                                 for code, item in data["inventory"].items():
                                     if item["name"] == approved_req["item"]:
-                                        if approved_req["type"] == "IN":
-                                            item["qty"] += int(approved_req["qty"])
-                                        elif approved_req["type"] == "OUT":
-                                            item["qty"] -= int(approved_req["qty"])
-                                        elif approved_req["type"] == "RETURN":
-                                            item["qty"] += int(approved_req["qty"])
-
+                                        if approved_req["type"] == "IN": item["qty"] += int(approved_req["qty"])
+                                        elif approved_req["type"] == "OUT": item["qty"] -= int(approved_req["qty"])
+                                        elif approved_req["type"] == "RETURN": item["qty"] += int(approved_req["qty"])
                                         data["history"].append({
                                             "action": f"APPROVE_{approved_req['type']}",
                                             "item": approved_req["item"],
@@ -1040,44 +1087,7 @@ with tab1:
 
         # ----- Dashboard (User) -----
         if menu == "Dashboard":
-            st.markdown(f"## Dashboard - Brand {st.session_state.current_brand.capitalize()}")
-            st.caption("Menampilkan total **IN / OUT / Retur** (approved) 3 bulan terakhir + grafik berdasarkan tanggal transaksi.")
-            st.divider()
-
-            df_inv, df_dash, month_labels = build_dashboard_3months_tables(data)
-            cols = st.columns(3)
-            for idx, lbl in enumerate(month_labels):
-                in_col = f"{lbl} IN"; out_col = f"{lbl} OUT"; ret_col = f"{lbl} Retur"
-                total_in = int(df_dash[in_col].sum()) if in_col in df_dash else 0
-                total_out = int(df_dash[out_col].sum()) if out_col in df_dash else 0
-                total_ret = int(df_dash[ret_col].sum()) if ret_col in df_dash else 0
-                with cols[idx]:
-                    st.metric(f"{lbl} • IN", f"{total_in}")
-                    st.metric(f"{lbl} • OUT", f"{total_out}")
-                    st.metric(f"{lbl} • Retur", f"{total_ret}")
-
-            st.markdown("### Grafik")
-            dashboard_charts(df_dash, month_labels, df_inv)
-
-            st.markdown("### Rekap Per Barang (3 Bulan Terakhir + Current Stock)")
-            if df_dash.empty:
-                st.info("Belum ada data.")
-            else:
-                ordered_cols = ["Nama Barang"]
-                for lbl in month_labels:
-                    ordered_cols += [f"{lbl} IN", f"{lbl} OUT", f"{lbl} Retur"]
-                ordered_cols += ["Current Stock"]
-                st.dataframe(
-                    df_dash[ordered_cols].sort_values("Current Stock", ascending=False),
-                    use_container_width=True, hide_index=True
-                )
-                excel_bytes = dataframe_to_excel_bytes(df_dash[ordered_cols], sheet_name="Dashboard 3 Bulan")
-                st.download_button(
-                    label="Unduh Excel Dashboard",
-                    data=excel_bytes,
-                    file_name=f"Dashboard_3_Bulan_{st.session_state.current_brand.capitalize()}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
+            render_dashboard_pro(data, brand_label=st.session_state.current_brand.capitalize(), allow_download=True)
 
         # ----- Stock Card (User) -----
         elif menu == "Stock Card":
@@ -1217,7 +1227,7 @@ with tab1:
                                         "user": st.session_state.username,
                                         "timestamp": timestamp(),
                                     }
-                                    norm = normalize_out_record(base)  # gunakan struktur standar
+                                    norm = normalize_out_record(base)
                                     norm["type"] = "IN"
                                     data["pending_requests"].append(norm)
                                     submit_count += 1
@@ -1246,14 +1256,26 @@ with tab1:
                         "Pilih Barang", range(len(items)),
                         format_func=lambda x: f"{items[x]['name']} (Stok: {items[x]['qty']} {items[x].get('unit', '-')})"
                     )
-                    max_qty = items[idx]["qty"]
-                    qty = col2.number_input("Jumlah", min_value=1, max_value=max_qty, step=1)
+
+                    # handle stok 0 -> kunci input
+                    max_qty = int(pd.to_numeric(items[idx].get("qty", 0), errors="coerce") or 0)
+                    if max_qty < 1:
+                        qty = 0
+                        col2.number_input("Jumlah", min_value=0, max_value=0, step=1, value=0, disabled=True)
+                        st.warning("Stok item ini 0. Tidak bisa menambah request OUT.")
+                    else:
+                        qty = col2.number_input("Jumlah", min_value=1, max_value=max_qty, step=1)
+
                     tipe = st.selectbox("Tipe Transaksi (wajib)", TRANS_TYPES, index=0)
                     event_manual = st.text_input("Nama Event (wajib)", placeholder="Misal: Pameran, Acara Kantor")
 
                     if st.button("Tambah Item OUT (Manual)"):
-                        if not event_manual.strip():
+                        if max_qty < 1:
+                            st.error("Stok 0 — tidak bisa menambah OUT untuk item ini.")
+                        elif not event_manual.strip():
                             st.error("Event wajib diisi.")
+                        elif qty < 1:
+                            st.error("Jumlah harus minimal 1.")
                         else:
                             selected_name = items[idx]["name"]
                             found_code = next((code for code, it in data["inventory"].items() if it.get("name") == selected_name), None)
@@ -1272,11 +1294,10 @@ with tab1:
 
                 # UPLOAD EXCEL
                 with tab2:
-                    st.info("Format kolom wajib: **Tanggal | Kode Barang | Nama Barang | Qty | Event | Tipe** (Tipe = Support atau Penjualan)")
-                    tmpl_bytes = make_out_template_bytes(data)
+                    st.info("Format kolom: **Tanggal | Kode Barang | Nama Barang | Qty | Event | Tipe** (Tipe = Support atau Penjualan)")
                     st.download_button(
                         label="📥 Unduh Template Excel OUT",
-                        data=tmpl_bytes,
+                        data=make_out_template_bytes(data),
                         file_name=f"Template_OUT_{st.session_state.current_brand.capitalize()}.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                     )
@@ -1296,8 +1317,7 @@ with tab1:
                                 st.error(f"Kolom berikut belum ada di Excel: {', '.join(missing)}")
                             else:
                                 if st.button("Tambah dari Excel (OUT)"):
-                                    errors = []
-                                    added = 0
+                                    errors, added = [], 0
                                     by_code = {code: (it.get("name"), it.get("unit", "-"), it.get("qty", 0)) for code, it in data["inventory"].items()}
                                     by_name = {it.get("name"): (code, it.get("unit", "-"), it.get("qty", 0)) for code, it in data["inventory"].items()}
 
@@ -1313,53 +1333,38 @@ with tab1:
                                             tipe_xl_raw = str(row["Tipe"]).strip().lower() if pd.notna(row["Tipe"]) else ""
 
                                             if not event_xl_raw:
-                                                errors.append(f"Baris {idx_row+2}: Event wajib diisi.")
-                                                continue
+                                                errors.append(f"Baris {idx_row+2}: Event wajib diisi."); continue
                                             if tipe_xl_raw not in ["support","penjualan"]:
-                                                errors.append(f"Baris {idx_row+2}: Tipe harus 'Support' atau 'Penjualan'.")
-                                                continue
+                                                errors.append(f"Baris {idx_row+2}: Tipe harus 'Support' atau 'Penjualan'."); continue
                                             tipe_xl = "Support" if tipe_xl_raw=="support" else "Penjualan"
 
                                             inv_name, inv_unit, inv_stock = (None, None, None)
                                             inv_code = None
                                             if code_xl and code_xl in by_code:
-                                                inv_name, inv_unit, inv_stock = by_code[code_xl]
-                                                inv_code = code_xl
+                                                inv_name, inv_unit, inv_stock = by_code[code_xl]; inv_code = code_xl
                                             elif name_xl and name_xl in by_name:
-                                                inv_code, inv_unit, inv_stock = by_name[name_xl]
-                                                inv_name = name_xl
+                                                inv_code, inv_unit, inv_stock = by_name[name_xl]; inv_name = name_xl
                                             else:
-                                                errors.append(f"Baris {idx_row+2}: Item tidak ditemukan (kode='{code_xl}', nama='{name_xl}').")
-                                                continue
-
+                                                errors.append(f"Baris {idx_row+2}: Item tidak ditemukan (kode='{code_xl}', nama='{name_xl}')."); continue
                                             if qty_xl <= 0:
-                                                errors.append(f"Baris {idx_row+2}: Qty harus > 0.")
-                                                continue
+                                                errors.append(f"Baris {idx_row+2}: Qty harus > 0."); continue
                                             if inv_stock is not None and qty_xl > inv_stock:
-                                                errors.append(f"Baris {idx_row+2}: Qty ({qty_xl}) melebihi stok ({inv_stock}) untuk item '{inv_name}'.")
-                                                continue
+                                                errors.append(f"Baris {idx_row+2}: Qty ({qty_xl}) melebihi stok ({inv_stock}) untuk '{inv_name}'."); continue
 
                                             base = {
-                                                "date": date_str,
-                                                "code": inv_code if inv_code else "-",
-                                                "item": inv_name,
-                                                "qty": qty_xl,
-                                                "unit": inv_unit if inv_unit else "-",
-                                                "event": event_xl_raw,
-                                                "trans_type": tipe_xl,
-                                                "user": st.session_state.username,
+                                                "date": date_str, "code": inv_code if inv_code else "-", "item": inv_name,
+                                                "qty": qty_xl, "unit": inv_unit if inv_unit else "-",
+                                                "event": event_xl_raw, "trans_type": tipe_xl, "user": st.session_state.username,
                                             }
                                             st.session_state.req_out_items.append(normalize_out_record(base))
                                             added += 1
                                         except Exception as e:
                                             errors.append(f"Baris {idx_row+2}: {e}")
 
-                                    if added:
-                                        st.success(f"{added} baris berhasil ditambahkan ke daftar request OUT.")
-                                    if errors:
-                                        st.warning("Beberapa baris dilewati:\n- " + "\n- ".join(errors))
+                                    if added: st.success(f"{added} baris ditambahkan ke daftar OUT.")
+                                    if errors: st.warning("Beberapa baris dilewati:\n- " + "\n- ".join(errors))
 
-                # DAFTAR & SUBMIT OUT (dengan PILIH SEMUA)
+                # DAFTAR & SUBMIT OUT
                 if st.session_state.req_out_items:
                     st.subheader("Daftar Item Request OUT")
                     df_out = pd.DataFrame(st.session_state.req_out_items)
@@ -1370,10 +1375,8 @@ with tab1:
                         st.session_state.out_select_flags = [False] * len(st.session_state.req_out_items)
 
                     c1, c2 = st.columns([1,1])
-                    if c1.button("Pilih semua", key="out_sel_all"):
-                        st.session_state.out_select_flags = [True] * len(st.session_state.req_out_items)
-                    if c2.button("Kosongkan pilihan", key="out_sel_none"):
-                        st.session_state.out_select_flags = [False] * len(st.session_state.req_out_items)
+                    if c1.button("Pilih semua", key="out_sel_all"): st.session_state.out_select_flags = [True] * len(st.session_state.req_out_items)
+                    if c2.button("Kosongkan pilihan", key="out_sel_none"): st.session_state.out_select_flags = [False] * len(st.session_state.req_out_items)
 
                     df_out["Pilih"] = st.session_state.out_select_flags
                     edited_df_out = st.data_editor(df_out, key="editor_out", use_container_width=True, hide_index=True)
@@ -1398,15 +1401,11 @@ with tab1:
                             new_state, new_flags = [], []
                             for selected, rec in zip(mask, st.session_state.req_out_items):
                                 if selected:
-                                    base = rec.copy()
-                                    base["user"] = st.session_state.username
-                                    norm = normalize_out_record(base)
-                                    norm["type"] = "OUT"
-                                    data["pending_requests"].append(norm)
-                                    submitted += 1
+                                    base = rec.copy(); base["user"] = st.session_state.username
+                                    norm = normalize_out_record(base); norm["type"] = "OUT"
+                                    data["pending_requests"].append(norm); submitted += 1
                                 else:
                                     new_state.append(rec); new_flags.append(False)
-
                             save_data(data, st.session_state.current_brand)
                             st.session_state.req_out_items = new_state
                             st.session_state.out_select_flags = new_flags
@@ -1421,19 +1420,17 @@ with tab1:
             st.divider()
 
             if items:
-                # Peta event OUT yang sudah APPROVE per item
+                # Peta event OUT approved per item
                 hist = data.get("history", [])
                 approved_out_map = {}
                 for h in hist:
                     if h.get("action") == "APPROVE_OUT":
-                        it = h.get("item")
-                        ev = h.get("event")
+                        it = h.get("item"); ev = h.get("event")
                         if it and ev and ev not in ["-", None, ""]:
                             approved_out_map.setdefault(it, set()).add(ev)
 
                 tab1, tab2 = st.tabs(["Input Manual", "Upload Excel"])
 
-                # ---------- INPUT MANUAL ----------
                 with tab1:
                     col1, col2 = st.columns(2)
                     idx = col1.selectbox(
@@ -1441,44 +1438,32 @@ with tab1:
                         format_func=lambda x: f"{items[x]['name']} (Stok Gudang: {items[x]['qty']} {items[x].get('unit','-')})"
                     )
                     qty = col2.number_input("Jumlah Retur", min_value=1, step=1)
-
-                    item_name = items[idx]["name"]
-                    unit_name = items[idx].get("unit", "-")
-
+                    item_name = items[idx]["name"]; unit_name = items[idx].get("unit", "-")
                     approved_events = sorted(list(approved_out_map.get(item_name, set())))
                     if not approved_events:
-                        st.warning("Belum ada event OUT yang di-approve untuk item ini. Retur membutuhkan referensi event OUT.")
+                        st.warning("Belum ada event OUT yang di-approve untuk item ini.")
                         event_choice = None
                     else:
-                        event_choice = st.selectbox("Pilih Event (berdasarkan transaksi OUT yang sudah disetujui)", approved_events)
-
+                        event_choice = st.selectbox("Pilih Event (berdasarkan OUT yang disetujui)", approved_events)
                     if st.button("Tambah Item Retur (Manual)"):
                         if not event_choice:
-                            st.error("Pilih event terlebih dahulu (tidak boleh kosong).")
+                            st.error("Pilih event terlebih dahulu.")
                         else:
-                            base = {
-                                "date": datetime.now().strftime("%Y-%m-%d"),
-                                "code": next((c for c, it in data["inventory"].items() if it.get("name")==item_name), "-"),
-                                "item": item_name,
-                                "qty": qty,
-                                "unit": unit_name,
-                                "event": event_choice,
-                                "user": st.session_state.username,
-                            }
+                            base = {"date": datetime.now().strftime("%Y-%m-%d"),
+                                    "code": next((c for c, it in data["inventory"].items() if it.get("name")==item_name), "-"),
+                                    "item": item_name, "qty": qty, "unit": unit_name,
+                                    "event": event_choice, "user": st.session_state.username}
                             st.session_state.req_ret_items.append(normalize_return_record(base))
                             st.success("Item Retur ditambahkan ke daftar.")
 
-                # ---------- UPLOAD EXCEL ----------
                 with tab2:
-                    st.info("Format kolom wajib: **Tanggal | Kode Barang | Nama Barang | Qty | Event**")
-                    tmpl_ret = make_return_template_bytes(data)
+                    st.info("Format: **Tanggal | Kode Barang | Nama Barang | Qty | Event**")
                     st.download_button(
                         label="📥 Unduh Template Excel Retur",
-                        data=tmpl_ret,
+                        data=make_return_template_bytes(data),
                         file_name=f"Template_Retur_{st.session_state.current_brand.capitalize()}.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                     )
-
                     file_upload = st.file_uploader("Upload File Excel Retur", type=["xlsx"], key="ret_excel_uploader")
                     if file_upload:
                         try:
@@ -1494,89 +1479,56 @@ with tab1:
                                 st.error(f"Kolom berikut belum ada di Excel: {', '.join(missing)}")
                             else:
                                 if st.button("Tambah dari Excel (Retur)"):
-                                    errors = []
-                                    added = 0
-
+                                    errors, added = [], 0
                                     by_code = {code: (it.get("name"), it.get("unit", "-")) for code, it in data["inventory"].items()}
                                     by_name = {it.get("name"): (code, it.get("unit", "-")) for code, it in data["inventory"].items()}
-
                                     for idx_row, row in df_new.iterrows():
                                         try:
                                             dt = pd.to_datetime(row["Tanggal"], errors="coerce")
                                             date_str = dt.strftime("%Y-%m-%d") if pd.notna(dt) else datetime.now().strftime("%Y-%m-%d")
-
                                             code_xl = str(row["Kode Barang"]).strip() if pd.notna(row["Kode Barang"]) else ""
                                             name_xl = str(row["Nama Barang"]).strip() if pd.notna(row["Nama Barang"]) else ""
                                             qty_xl = int(pd.to_numeric(row["Qty"], errors="coerce") or 0)
                                             event_xl_raw = str(row["Event"]).strip() if pd.notna(row["Event"]) else ""
+                                            if qty_xl <= 0: errors.append(f"Baris {idx_row+2}: Qty harus > 0."); continue
+                                            if not event_xl_raw: errors.append(f"Baris {idx_row+2}: Event wajib diisi."); continue
 
-                                            if qty_xl <= 0:
-                                                errors.append(f"Baris {idx_row+2}: Qty harus > 0.")
-                                                continue
-                                            if not event_xl_raw:
-                                                errors.append(f"Baris {idx_row+2}: Event wajib diisi.")
-                                                continue
-
-                                            inv_name, inv_unit = (None, None)
-                                            inv_code = None
-                                            if code_xl and code_xl in by_code:
-                                                inv_name, inv_unit = by_code[code_xl]
-                                                inv_code = code_xl
-                                            elif name_xl and name_xl in by_name:
-                                                inv_code, inv_unit = by_name[name_xl]
-                                                inv_name = name_xl
-                                            else:
-                                                errors.append(f"Baris {idx_row+2}: Item tidak ditemukan (kode='{code_xl}', nama='{name_xl}').")
-                                                continue
+                                            inv_name, inv_unit = (None, None); inv_code = None
+                                            if code_xl and code_xl in by_code: inv_name, inv_unit = by_code[code_xl]; inv_code = code_xl
+                                            elif name_xl and name_xl in by_name: inv_code, inv_unit = by_name[name_xl]; inv_name = name_xl
+                                            else: errors.append(f"Baris {idx_row+2}: Item tidak ditemukan."); continue
 
                                             valid_events = approved_out_map.get(inv_name, set())
                                             exists = any(e.strip().lower() == event_xl_raw.strip().lower() for e in valid_events)
                                             if not exists:
                                                 if not valid_events:
-                                                    errors.append(f"Baris {idx_row+2}: Tidak ada event OUT yang di-approve untuk item '{inv_name}'.")
+                                                    errors.append(f"Baris {idx_row+2}: Belum ada event OUT yang di-approve untuk '{inv_name}'.")
                                                 else:
-                                                    errors.append(
-                                                        f"Baris {idx_row+2}: Event '{event_xl_raw}' tidak cocok dengan event OUT yang di-approve untuk '{inv_name}' "
-                                                        f"(tersedia: {', '.join(sorted(valid_events))})."
-                                                    )
+                                                    errors.append(f"Baris {idx_row+2}: Event '{event_xl_raw}' tidak cocok. Tersedia: {', '.join(sorted(valid_events))}.")
                                                 continue
 
-                                            base = {
-                                                "date": date_str,
-                                                "code": inv_code if inv_code else "-",
-                                                "item": inv_name,
-                                                "qty": qty_xl,
-                                                "unit": inv_unit if inv_unit else "-",
-                                                "event": next((e for e in valid_events if e.strip().lower()==event_xl_raw.strip().lower()), event_xl_raw),
-                                                "user": st.session_state.username,
-                                            }
-                                            st.session_state.req_ret_items.append(normalize_return_record(base))
-                                            added += 1
+                                            base = {"date": date_str, "code": inv_code if inv_code else "-",
+                                                    "item": inv_name, "qty": qty_xl, "unit": inv_unit if inv_unit else "-",
+                                                    "event": next((e for e in valid_events if e.strip().lower()==event_xl_raw.strip().lower()), event_xl_raw),
+                                                    "user": st.session_state.username}
+                                            st.session_state.req_ret_items.append(normalize_return_record(base)); added += 1
                                         except Exception as e:
                                             errors.append(f"Baris {idx_row+2}: {e}")
+                                    if added: st.success(f"{added} baris retur ditambahkan.")
+                                    if errors: st.warning("Beberapa baris gagal:\n- " + "\n- ".join(errors))
 
-                                    if added:
-                                        st.success(f"{added} baris retur berhasil ditambahkan ke daftar.")
-                                    if errors:
-                                        st.warning("Beberapa baris gagal:\n- " + "\n- ".join(errors))
-
-                # ---------- LIST & SUBMIT ----------
                 if st.session_state.req_ret_items:
                     st.subheader("Daftar Item Request Retur")
-
                     if "ret_select_flags" not in st.session_state or len(st.session_state.ret_select_flags) != len(st.session_state.req_ret_items):
                         st.session_state.ret_select_flags = [False]*len(st.session_state.req_ret_items)
 
                     cR1, cR2 = st.columns([1,1])
-                    if cR1.button("Pilih semua", key="ret_sel_all"):
-                        st.session_state.ret_select_flags = [True]*len(st.session_state.req_ret_items)
-                    if cR2.button("Kosongkan pilihan", key="ret_sel_none"):
-                        st.session_state.ret_select_flags = [False]*len(st.session_state.req_ret_items)
+                    if cR1.button("Pilih semua", key="ret_sel_all"): st.session_state.ret_select_flags = [True]*len(st.session_state.req_ret_items)
+                    if cR2.button("Kosongkan pilihan", key="ret_sel_none"): st.session_state.ret_select_flags = [False]*len(st.session_state.req_ret_items)
 
                     df_ret = pd.DataFrame(st.session_state.req_ret_items)
                     pref_cols = [c for c in ["date","code","item","qty","unit","event"] if c in df_ret.columns]
-                    df_ret = df_ret[pref_cols]
-                    df_ret["Pilih"] = st.session_state.ret_select_flags
+                    df_ret = df_ret[pref_cols]; df_ret["Pilih"] = st.session_state.ret_select_flags
                     edited_df_ret = st.data_editor(df_ret, key="editor_ret", use_container_width=True, hide_index=True)
                     st.session_state.ret_select_flags = edited_df_ret["Pilih"].fillna(False).tolist()
 
@@ -1597,10 +1549,8 @@ with tab1:
                         else:
                             for selected, rec in zip(mask, st.session_state.req_ret_items):
                                 if selected:
-                                    base = rec.copy()
-                                    base["user"] = st.session_state.username
-                                    norm = normalize_return_record(base)
-                                    norm["type"] = "RETURN"
+                                    base = rec.copy(); base["user"] = st.session_state.username
+                                    norm = normalize_return_record(base); norm["type"] = "RETURN"
                                     data["pending_requests"].append(norm)
                             save_data(data, st.session_state.current_brand)
                             st.session_state.req_ret_items = [rec for rec, keep in zip(st.session_state.req_ret_items, [not x for x in mask]) if keep]
@@ -1621,48 +1571,28 @@ with tab1:
             for h in my_hist:
                 act = h["action"].upper()
                 if act.startswith("APPROVE_"):
-                    status = "APPROVED"
-                    ttype = act.split("_", 1)[-1]  # IN / OUT / RETURN
+                    status = "APPROVED"; ttype = act.split("_", 1)[-1]
                 elif act.startswith("REJECT_"):
-                    status = "REJECTED"
-                    ttype = act.split("_", 1)[-1]
+                    status = "REJECTED"; ttype = act.split("_", 1)[-1]
                 elif act.startswith("ADD_"):
-                    status = "-"
-                    ttype = "ADD"
+                    status = "-"; ttype = "ADD"
                 else:
-                    status = "-"
-                    ttype = "-"
-
+                    status = "-"; ttype = "-"
                 rows.append({
-                    "Status": status,
-                    "Type": ttype,
-                    "Date": h.get("date", None),
-                    "Code": h.get("code","-"),
-                    "Item": h.get("item","-"),
-                    "Qty": h.get("qty","-"),
-                    "Unit": h.get("unit","-"),
-                    "Trans. Tipe": h.get("trans_type","-"),
-                    "Event": h.get("event","-"),
-                    "DO": h.get("do_number","-"),
-                    "Timestamp": h.get("timestamp","-")
+                    "Status": status, "Type": ttype, "Date": h.get("date", None), "Code": h.get("code","-"),
+                    "Item": h.get("item","-"), "Qty": h.get("qty","-"), "Unit": h.get("unit","-"),
+                    "Trans. Tipe": h.get("trans_type","-"), "Event": h.get("event","-"),
+                    "DO": h.get("do_number","-"), "Timestamp": h.get("timestamp","-")
                 })
 
-            # gabungkan pending milik user
             pend = data.get("pending_requests", [])
             my_pend = [p for p in pend if p.get("user") == st.session_state.username]
             for p in my_pend:
                 rows.append({
-                    "Status": "PENDING",
-                    "Type": p.get("type","-"),
-                    "Date": p.get("date", None),
-                    "Code": p.get("code","-"),
-                    "Item": p.get("item","-"),
-                    "Qty": p.get("qty","-"),
-                    "Unit": p.get("unit","-"),
-                    "Trans. Tipe": p.get("trans_type","-"),
-                    "Event": p.get("event","-"),
-                    "DO": p.get("do_number","-"),
-                    "Timestamp": p.get("timestamp","-")
+                    "Status": "PENDING", "Type": p.get("type","-"), "Date": p.get("date", None), "Code": p.get("code","-"),
+                    "Item": p.get("item","-"), "Qty": p.get("qty","-"), "Unit": p.get("unit","-"),
+                    "Trans. Tipe": p.get("trans_type","-"), "Event": p.get("event","-"),
+                    "DO": p.get("do_number","-"), "Timestamp": p.get("timestamp","-")
                 })
 
             if rows:
@@ -1675,4 +1605,3 @@ with tab1:
                 st.dataframe(df_rows, use_container_width=True, hide_index=True)
             else:
                 st.info("Anda belum memiliki riwayat transaksi.")
-
