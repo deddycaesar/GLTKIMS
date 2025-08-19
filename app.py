@@ -441,7 +441,8 @@ def _gauge(value, max_value, title):
 
 def render_dashboard_pro(data: dict, brand_label: str, allow_download=True):
     """Dashboard interaktif:
-       - 3 grafik sejajar: IN / OUT / RETURN per bulan (urut)
+       - KPI ringkas (Total SKU, Total Qty, IN/OUT/RETUR periode)
+       - 3 grafik sejajar: IN / OUT / RETURN per bulan (urut & batang tebal)
        - Top 10 Current Stock (nama item)
        - Top 5 Event OUT
        - Reorder insight berdasar OUT 3 bulan terakhir
@@ -471,20 +472,37 @@ def render_dashboard_pro(data: dict, brand_label: str, allow_download=True):
     else:
         df_range = pd.DataFrame(columns=["date_eff","type_norm","qty","item","event","trans_type"])
 
-    # Helper agregasi bulanan (urut)
+    # ====== KPI / Summary ======
+    total_sku = int(len(df_inv)) if not df_inv.empty else 0
+    total_qty = int(df_inv["Current Stock"].sum()) if not df_inv.empty else 0
+    tot_in  = int(df_range.loc[df_range["type_norm"]=="IN", "qty"].sum()) if not df_range.empty else 0
+    tot_out = int(df_range.loc[df_range["type_norm"]=="OUT", "qty"].sum()) if not df_range.empty else 0
+    tot_ret = int(df_range.loc[df_range["type_norm"]=="RETURN", "qty"].sum()) if not df_range.empty else 0
+
+    k1, k2, k3, k4 = st.columns(4)
+    _kpi_card("Total SKU", f"{total_sku:,}", f"Brand {brand_label}")
+    _kpi_card("Total Qty (Stock)", f"{total_qty:,}", f"Per {pd.Timestamp(end_date).strftime('%d %b %Y')}")
+    _kpi_card("Total IN (periode)", f"{tot_in:,}", None)
+    _kpi_card("Total OUT / Retur", f"{tot_out:,} / {tot_ret:,}", None)
+
+    st.divider()
+
+    # Helper agregasi bulanan (urut) + label & index untuk sort tegas
     def month_agg(df, tipe):
         d = df[df["type_norm"]==tipe].copy()
         if d.empty:
-            return pd.DataFrame({"month": [], "qty": []})
-        d["month"] = d["date_eff"].dt.to_period("M").dt.to_timestamp()  # Awal bulan
+            return pd.DataFrame({"month": [], "qty": [], "Periode": [], "idx": []})
+        d["month"] = d["date_eff"].dt.to_period("M").dt.to_timestamp()  # awal bulan
         g = d.groupby("month", as_index=False)["qty"].sum().sort_values("month")
+        g["Periode"] = g["month"].dt.strftime("%b %Y")
+        g["idx"] = g["month"].dt.year.astype(int) * 12 + g["month"].dt.month.astype(int)
         return g
 
     g_in  = month_agg(df_range, "IN")
     g_out = month_agg(df_range, "OUT")
     g_ret = month_agg(df_range, "RETURN")
 
-    # -------- Row 1: IN/OUT/RETURN per month --------
+    # -------- Row 1: IN/OUT/RETURN per month (batang tebal & bulan urut) --------
     c1, c2, c3 = st.columns(3)
     def _month_bar(container, dfm, title, color="#0EA5E9"):
         with container:
@@ -492,19 +510,23 @@ def render_dashboard_pro(data: dict, brand_label: str, allow_download=True):
             if _ALT_OK and not dfm.empty:
                 chart = (
                     alt.Chart(dfm)
-                    .mark_bar()
+                    .mark_bar(size=28)  # batang lebih tebal
                     .encode(
-                        x=alt.X("month:T", title="Periode", axis=alt.Axis(format="%b %Y")),
+                        x=alt.X("Periode:O",
+                                sort=alt.SortField(field="idx", order="ascending"),
+                                title="Periode"),
                         y=alt.Y("qty:Q", title="Qty"),
                         tooltip=[alt.Tooltip("month:T", title="Periode", format="%b %Y"), "qty:Q"],
                         color=alt.value(color)
                     )
-                    .properties(height=260)
+                    .properties(height=320)
                 )
                 st.altair_chart(chart, use_container_width=True)
             else:
                 if dfm.empty: st.info("Belum ada data.")
-                else: st.bar_chart(dfm.set_index("month")["qty"])
+                else:
+                    show = dfm.set_index("Periode")["qty"]
+                    st.bar_chart(show)
             st.markdown("</div>", unsafe_allow_html=True)
 
     _month_bar(c1, g_in,  "IN per Month",    "#22C55E")
@@ -521,13 +543,13 @@ def render_dashboard_pro(data: dict, brand_label: str, allow_download=True):
             top10 = df_inv.sort_values("Current Stock", ascending=False).head(10)
             chart = (
                 alt.Chart(top10)
-                .mark_bar()
+                .mark_bar(size=22)
                 .encode(
                     y=alt.Y("Nama Barang:N", sort="-x", title=None),
                     x=alt.X("Current Stock:Q", title="Qty"),
                     tooltip=["Nama Barang","Current Stock"]
                 )
-                .properties(height=300)
+                .properties(height=360)
             )
             st.altair_chart(chart, use_container_width=True)
         else:
@@ -544,13 +566,13 @@ def render_dashboard_pro(data: dict, brand_label: str, allow_download=True):
         if _ALT_OK and not ev_top.empty:
             chart = (
                 alt.Chart(ev_top)
-                .mark_bar()
+                .mark_bar(size=22)
                 .encode(
                     y=alt.Y("event:N", sort="-x", title="Event"),
                     x=alt.X("qty:Q", title="Qty"),
                     tooltip=["event","qty"]
                 )
-                .properties(height=300)
+                .properties(height=360)
             )
             st.altair_chart(chart, use_container_width=True)
         else:
@@ -1618,4 +1640,5 @@ else:
                 st.dataframe(df_rows, use_container_width=True, hide_index=True)
             else:
                 st.info("Anda belum memiliki riwayat transaksi.")
+
 
