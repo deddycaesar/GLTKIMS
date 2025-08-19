@@ -231,6 +231,40 @@ def make_out_template_bytes(data) -> bytes:
     output.seek(0)
     return output.read()
 
+def make_return_template_bytes(data) -> bytes:
+    """Template Excel Retur: Tanggal | Kode Barang | Nama Barang | Qty | Event"""
+    today = pd.Timestamp.now().strftime("%Y-%m-%d")
+    cols = ["Tanggal", "Kode Barang", "Nama Barang", "Qty", "Event"]
+
+    # isi contoh baris dari inventory bila ada
+    rows = []
+    inv_items = list(data.get("inventory", {}).items())
+    if inv_items:
+        for (code, item) in inv_items[:2]:
+            rows.append({
+                "Tanggal": today,
+                "Kode Barang": code,
+                "Nama Barang": item.get("name", ""),
+                "Qty": 1,
+                "Event": "Contoh event dari OUT"
+            })
+    else:
+        rows.append({
+            "Tanggal": today,
+            "Kode Barang": "ITM-0001",
+            "Nama Barang": "Contoh Produk",
+            "Qty": 1,
+            "Event": "Contoh event dari OUT"
+        })
+
+    df_tmpl = pd.DataFrame(rows, columns=cols)
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+        df_tmpl.to_excel(writer, sheet_name="Template Retur", index=False)
+    output.seek(0)
+    return output.read()
+
+
 def make_master_template_bytes() -> bytes:
     """Template Excel Master: Kode Barang | Nama Barang | Qty | Satuan | Kategori"""
     cols = ["Kode Barang", "Nama Barang", "Qty", "Satuan", "Kategori"]
@@ -1204,93 +1238,212 @@ else:
 
         # ----- Request Retur -----
         elif menu == "Request Retur":
-            st.markdown(f"## Request Retur (Pengembalian ke Gudang) - Brand {st.session_state.current_brand.capitalize()}")
-            st.divider()
+    st.markdown(f"## Request Retur (Pengembalian ke Gudang) - Brand {st.session_state.current_brand.capitalize()}")
+    st.divider()
 
-            if items:
-                col1, col2 = st.columns(2)
-                idx = col1.selectbox(
-                    "Pilih Barang", range(len(items)),
-                    format_func=lambda x: f"{items[x]['name']} (Stok Gudang: {items[x]['qty']} {items[x].get('unit','-')})"
-                )
-                qty = col2.number_input("Jumlah Retur", min_value=1, step=1)
+    if items:
+        # Peta event OUT yang sudah APPROVE per item (untuk validasi & dropdown)
+        hist = data.get("history", [])
+        approved_out_map = {}
+        for h in hist:
+            if h.get("action") == "APPROVE_OUT":
+                it = h.get("item")
+                ev = h.get("event")
+                if it and ev and ev not in ["-", None, ""]:
+                    approved_out_map.setdefault(it, set()).add(ev)
 
-                item_name = items[idx]["name"]
-                approved_out_events = sorted(list({
-                    h.get("event","-") for h in data.get("history", [])
-                    if h.get("action") == "APPROVE_OUT" and h.get("item") == item_name and h.get("event") not in [None, "-", ""]
-                }))
-                if not approved_out_events:
-                    st.warning("Belum ada event OUT yang di-approve untuk item ini. Retur membutuhkan referensi event OUT.")
-                    event_choice = None
-                else:
-                    event_choice = st.selectbox("Pilih Event (berdasarkan transaksi OUT yang sudah disetujui)", approved_out_events)
+        tab1, tab2 = st.tabs(["Input Manual", "Upload Excel"])
 
-                if st.button("Tambah Item Retur"):
-                    if event_choice:
-                        st.session_state.req_ret_items.append({
-                            "item": item_name,
-                            "qty": qty,
-                            "unit": items[idx].get("unit", "-"),
-                            "event": event_choice
-                        })
-                        st.success("Item Retur ditambahkan ke daftar.")
-                    else:
-                        st.error("Pilih event terlebih dahulu (tidak boleh kosong).")
+        # ---------- INPUT MANUAL ----------
+        with tab1:
+            col1, col2 = st.columns(2)
+            idx = col1.selectbox(
+                "Pilih Barang", range(len(items)),
+                format_func=lambda x: f"{items[x]['name']} (Stok Gudang: {items[x]['qty']} {items[x].get('unit','-')})"
+            )
+            qty = col2.number_input("Jumlah Retur", min_value=1, step=1)
 
-                if st.session_state.req_ret_items:
-                    st.subheader("Daftar Item Request Retur")
+            item_name = items[idx]["name"]
+            unit_name = items[idx].get("unit", "-")
 
-                    if "ret_select_flags" not in st.session_state or len(st.session_state.ret_select_flags) != len(st.session_state.req_ret_items):
-                        st.session_state.ret_select_flags = [False]*len(st.session_state.req_ret_items)
-
-                    cR1, cR2 = st.columns([1,1])
-                    if cR1.button("Pilih semua", key="ret_sel_all"):
-                        st.session_state.ret_select_flags = [True]*len(st.session_state.req_ret_items)
-                    if cR2.button("Kosongkan pilihan", key="ret_sel_none"):
-                        st.session_state.ret_select_flags = [False]*len(st.session_state.req_ret_items)
-
-                    df_ret = pd.DataFrame(st.session_state.req_ret_items)
-                    df_ret["Pilih"] = st.session_state.ret_select_flags
-                    edited_df_ret = st.data_editor(df_ret, key="editor_ret", use_container_width=True, hide_index=True)
-                    st.session_state.ret_select_flags = edited_df_ret["Pilih"].fillna(False).tolist()
-
-                    if st.button("Hapus Item Terpilih", key="delete_ret"):
-                        mask = st.session_state.ret_select_flags
-                        if any(mask):
-                            st.session_state.req_ret_items = [rec for rec, keep in zip(st.session_state.req_ret_items, [not x for x in mask]) if keep]
-                            st.session_state.ret_select_flags = [False]*len(st.session_state.req_ret_items)
-                            st.rerun()
-                        else:
-                            st.info("Tidak ada baris yang dipilih.")
-
-                    st.divider()
-                    if st.button("Ajukan Request Retur Terpilih"):
-                        mask = st.session_state.ret_select_flags
-                        if not any(mask):
-                            st.warning("Pilih setidaknya satu item untuk diajukan.")
-                        else:
-                            for selected, rec in zip(mask, st.session_state.req_ret_items):
-                                if selected:
-                                    request_data = {
-                                        "type": "RETURN",
-                                        "item": rec["item"],
-                                        "qty": int(rec["qty"]),
-                                        "unit": rec.get("unit", "-"),
-                                        "user": st.session_state.username,
-                                        "event": rec.get("event", "-"),
-                                        "do_number": "-",
-                                        "attachment": None,
-                                        "timestamp": timestamp()
-                                    }
-                                    data["pending_requests"].append(request_data)
-                            save_data(data, st.session_state.current_brand)
-                            st.session_state.req_ret_items = [rec for rec, keep in zip(st.session_state.req_ret_items, [not x for x in mask]) if keep]
-                            st.session_state.ret_select_flags = [False]*len(st.session_state.req_ret_items)
-                            st.success("Request RETUR diajukan & menunggu approval.")
-                            st.rerun()
+            approved_events = sorted(list(approved_out_map.get(item_name, set())))
+            if not approved_events:
+                st.warning("Belum ada event OUT yang di-approve untuk item ini. Retur membutuhkan referensi event OUT.")
+                event_choice = None
             else:
-                st.info("Belum ada master barang. Silakan hubungi admin.")
+                event_choice = st.selectbox("Pilih Event (berdasarkan transaksi OUT yang sudah disetujui)", approved_events)
+
+            if st.button("Tambah Item Retur (Manual)"):
+                if not event_choice:
+                    st.error("Pilih event terlebih dahulu (tidak boleh kosong).")
+                else:
+                    today_str = datetime.now().strftime("%Y-%m-%d")  # tanggal otomatis
+                    st.session_state.req_ret_items.append({
+                        "date": today_str,
+                        "code": next((c for c, it in data["inventory"].items() if it.get("name")==item_name), "-"),
+                        "item": item_name,
+                        "qty": qty,
+                        "unit": unit_name,
+                        "event": event_choice
+                    })
+                    st.success("Item Retur ditambahkan ke daftar.")
+
+        # ---------- UPLOAD EXCEL ----------
+        with tab2:
+            st.info("Format kolom wajib: **Tanggal | Kode Barang | Nama Barang | Qty | Event**")
+            tmpl_ret = make_return_template_bytes(data)
+            st.download_button(
+                label="📥 Unduh Template Excel Retur",
+                data=tmpl_ret,
+                file_name=f"Template_Retur_{st.session_state.current_brand.capitalize()}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+
+            file_upload = st.file_uploader("Upload File Excel Retur", type=["xlsx"], key="ret_excel_uploader")
+            if file_upload:
+                try:
+                    df_new = pd.read_excel(file_upload, engine='openpyxl')
+                except Exception as e:
+                    st.error(f"Gagal membaca file Excel: {e}")
+                    df_new = None
+
+                required_cols = ["Tanggal", "Kode Barang", "Nama Barang", "Qty", "Event"]
+                if df_new is not None:
+                    missing = [c for c in required_cols if c not in df_new.columns]
+                    if missing:
+                        st.error(f"Kolom berikut belum ada di Excel: {', '.join(missing)}")
+                    else:
+                        if st.button("Tambah dari Excel (Retur)"):
+                            errors = []
+                            added = 0
+
+                            # peta inventory untuk pencocokan kode/nama
+                            by_code = {code: (it.get("name"), it.get("unit", "-")) for code, it in data["inventory"].items()}
+                            by_name = {it.get("name"): (code, it.get("unit", "-")) for code, it in data["inventory"].items()}
+
+                            for idx_row, row in df_new.iterrows():
+                                try:
+                                    # tanggal (boleh kosong -> today)
+                                    dt = pd.to_datetime(row["Tanggal"], errors="coerce")
+                                    date_str = dt.strftime("%Y-%m-%d") if pd.notna(dt) else datetime.now().strftime("%Y-%m-%d")
+
+                                    code_xl = str(row["Kode Barang"]).strip() if pd.notna(row["Kode Barang"]) else ""
+                                    name_xl = str(row["Nama Barang"]).strip() if pd.notna(row["Nama Barang"]) else ""
+                                    qty_xl = int(pd.to_numeric(row["Qty"], errors="coerce") or 0)
+                                    event_xl_raw = str(row["Event"]).strip() if pd.notna(row["Event"]) else ""
+
+                                    if qty_xl <= 0:
+                                        errors.append(f"Baris {idx_row+2}: Qty harus > 0.")
+                                        continue
+                                    if not event_xl_raw:
+                                        errors.append(f"Baris {idx_row+2}: Event wajib diisi.")
+                                        continue
+
+                                    # identifikasi item di inventory
+                                    inv_name, inv_unit = (None, None)
+                                    inv_code = None
+                                    if code_xl and code_xl in by_code:
+                                        inv_name, inv_unit = by_code[code_xl]
+                                        inv_code = code_xl
+                                    elif name_xl and name_xl in by_name:
+                                        inv_code, inv_unit = by_name[name_xl]
+                                        inv_name = name_xl
+                                    else:
+                                        errors.append(f"Baris {idx_row+2}: Item tidak ditemukan (kode='{code_xl}', nama='{name_xl}').")
+                                        continue
+
+                                    # validasi: event harus ada di daftar APPROVE_OUT untuk item tsb
+                                    valid_events = approved_out_map.get(inv_name, set())
+                                    # bandingkan case-insensitive & trim
+                                    exists = any(e.strip().lower() == event_xl_raw.strip().lower() for e in valid_events)
+                                    if not exists:
+                                        if not valid_events:
+                                            errors.append(f"Baris {idx_row+2}: Tidak ada event OUT yang di-approve untuk item '{inv_name}'.")
+                                        else:
+                                            errors.append(
+                                                f"Baris {idx_row+2}: Event '{event_xl_raw}' tidak cocok dengan event OUT yang di-approve untuk '{inv_name}' "
+                                                f"(tersedia: {', '.join(sorted(valid_events))})."
+                                            )
+                                        continue
+
+                                    # simpan ke daftar request retur (belum submit)
+                                    st.session_state.req_ret_items.append({
+                                        "date": date_str,
+                                        "code": inv_code if inv_code else "-",
+                                        "item": inv_name,
+                                        "qty": qty_xl,
+                                        "unit": inv_unit if inv_unit else "-",
+                                        "event": next((e for e in valid_events if e.strip().lower()==event_xl_raw.strip().lower()), event_xl_raw)
+                                    })
+                                    added += 1
+                                except Exception as e:
+                                    errors.append(f"Baris {idx_row+2}: {e}")
+
+                            if added:
+                                st.success(f"{added} baris retur berhasil ditambahkan ke daftar.")
+                            if errors:
+                                st.warning("Beberapa baris gagal:\n- " + "\n- ".join(errors))
+
+        # ---------- LIST & SUBMIT ----------
+        if st.session_state.req_ret_items:
+            st.subheader("Daftar Item Request Retur")
+
+            if "ret_select_flags" not in st.session_state or len(st.session_state.ret_select_flags) != len(st.session_state.req_ret_items):
+                st.session_state.ret_select_flags = [False]*len(st.session_state.req_ret_items)
+
+            cR1, cR2 = st.columns([1,1])
+            if cR1.button("Pilih semua", key="ret_sel_all"):
+                st.session_state.ret_select_flags = [True]*len(st.session_state.req_ret_items)
+            if cR2.button("Kosongkan pilihan", key="ret_sel_none"):
+                st.session_state.ret_select_flags = [False]*len(st.session_state.req_ret_items)
+
+            df_ret = pd.DataFrame(st.session_state.req_ret_items)
+            pref_cols = [c for c in ["date","code","item","qty","unit","event"] if c in df_ret.columns]
+            df_ret = df_ret[pref_cols]
+            df_ret["Pilih"] = st.session_state.ret_select_flags
+            edited_df_ret = st.data_editor(df_ret, key="editor_ret", use_container_width=True, hide_index=True)
+            st.session_state.ret_select_flags = edited_df_ret["Pilih"].fillna(False).tolist()
+
+            if st.button("Hapus Item Terpilih", key="delete_ret"):
+                mask = st.session_state.ret_select_flags
+                if any(mask):
+                    st.session_state.req_ret_items = [rec for rec, keep in zip(st.session_state.req_ret_items, [not x for x in mask]) if keep]
+                    st.session_state.ret_select_flags = [False]*len(st.session_state.req_ret_items)
+                    st.rerun()
+                else:
+                    st.info("Tidak ada baris yang dipilih.")
+
+            st.divider()
+            if st.button("Ajukan Request Retur Terpilih"):
+                mask = st.session_state.ret_select_flags
+                if not any(mask):
+                    st.warning("Pilih setidaknya satu item untuk diajukan.")
+                else:
+                    for selected, rec in zip(mask, st.session_state.req_ret_items):
+                        if selected:
+                            request_data = {
+                                "type": "RETURN",
+                                "date": rec.get("date", datetime.now().strftime("%Y-%m-%d")),  # pastikan ada tanggal
+                                "code": rec.get("code", "-"),
+                                "item": rec["item"],
+                                "qty": int(rec["qty"]),
+                                "unit": rec.get("unit", "-"),
+                                "user": st.session_state.username,
+                                "event": rec.get("event", "-"),
+                                "do_number": "-",
+                                "attachment": None,
+                                "timestamp": timestamp()
+                            }
+                            data["pending_requests"].append(request_data)
+                    save_data(data, st.session_state.current_brand)
+                    # bersihkan yang sudah disubmit
+                    st.session_state.req_ret_items = [rec for rec, keep in zip(st.session_state.req_ret_items, [not x for x in mask]) if keep]
+                    st.session_state.ret_select_flags = [False]*len(st.session_state.req_ret_items)
+                    st.success("Request RETUR diajukan & menunggu approval.")
+                    st.rerun()
+
+    else:
+        st.info("Belum ada master barang. Silakan hubungi admin.")
 
         # ----- Lihat Riwayat (User) dengan Status -----
         elif menu == "Lihat Riwayat":
@@ -1357,4 +1510,5 @@ else:
                 st.dataframe(df_rows, use_container_width=True, hide_index=True)
             else:
                 st.info("Anda belum memiliki riwayat transaksi.")
+
 
