@@ -1,3 +1,9 @@
+# debug only — hapus/komentari setelah verifikasi
+if "GITHUB_TOKEN" not in st.secrets or not st.secrets.get("GITHUB_TOKEN"):
+    st.warning("GITHUB_TOKEN belum diset di Secrets Streamlit Cloud.")
+else:
+    st.info("GITHUB_TOKEN terdeteksi di Secrets.")
+
 # app.py
 import streamlit as st
 import json
@@ -1640,3 +1646,4 @@ else:
                 st.dataframe(df_rows, use_container_width=True, hide_index=True)
             else:
                 st.info("Anda belum memiliki riwayat transaksi.")
+
