@@ -1,18 +1,5 @@
 # app.py
 import streamlit as st
-
-# --- DEBUG SEMENTARA: tampilkan struktur keys di st.secrets (TIDAK menampilkan token) ---
-try:
-    keys = list(st.secrets.keys())
-    st.markdown(f"**DEBUG:** keys in st.secrets → `{keys}`")
-    # Jika ada blok [passwords], tunjukkan subkeys-nya juga
-    if "passwords" in st.secrets:
-        subk = list(st.secrets["passwords"].keys())
-        st.markdown(f"**DEBUG:** keys in st.secrets['passwords'] → `{subk}`")
-except Exception as e:
-    st.warning(f"DEBUG gagal: {e}")
-# --- Hapus/komentari blok ini setelah verifikasi ---
-
 import json
 import os
 from datetime import datetime
@@ -1653,6 +1640,7 @@ else:
                 st.dataframe(df_rows, use_container_width=True, hide_index=True)
             else:
                 st.info("Anda belum memiliki riwayat transaksi.")
+
 
 
 
